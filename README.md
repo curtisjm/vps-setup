@@ -6,16 +6,18 @@ Designed initially for a Contabo VPS 40 (12 vCPU / 48GB RAM / 250GB NVMe) in US 
 
 ## Scripts
 
-| Script | Purpose | Run as | Where |
-|---|---|---|---|
-| `00-harden.sh` | Security hardening (user, SSH, firewall, fail2ban, sysctl) | `root` | VPS |
-| `01-install-dev-tools.sh` | Node, Python, Go, CLI tools, Docker, Claude Code, Codex, Atuin, gt+bd | regular user | VPS |
-| `02-setup-git.sh` | Git config + GitHub SSH key + aliases | regular user | VPS |
-| `03-install-dolt.sh` | Dolt (version-controlled SQL DB for Gas Town beads) | regular user | VPS |
-| `04-contabo-diagnostics.sh` | Benchmark the VPS to check for noisy neighbors | regular user | VPS |
-| `05-export-from-laptop.sh` | Snapshot Dolt data + ~/.claude into tarballs | regular user | **laptop** |
-| `06-migrate-gastown.sh` | Clone ~/gt, restore tarballs, start daemon | regular user | VPS |
-| `07-install-tailscale.sh` | Join VPS to tailnet, optionally lock SSH to Tailscale-only | regular user | VPS |
+| Script | Purpose | Run as | Where | Deep dive |
+|---|---|---|---|---|
+| `00-harden.sh` | Security hardening (user, SSH, firewall, fail2ban, sysctl) | `root` | VPS | [docs/00-harden.md](docs/00-harden.md) |
+| `01-install-dev-tools.sh` | Node, Python, Go, CLI tools, Docker, Claude Code, Codex, Atuin, gt+bd | regular user | VPS | [docs/01-install-dev-tools.md](docs/01-install-dev-tools.md) |
+| `02-setup-git.sh` | Git config + GitHub SSH key + aliases | regular user | VPS | [docs/02-setup-git.md](docs/02-setup-git.md) |
+| `03-install-dolt.sh` | Dolt (version-controlled SQL DB for Gas Town beads) | regular user | VPS | [docs/03-install-dolt.md](docs/03-install-dolt.md) |
+| `04-contabo-diagnostics.sh` | Benchmark the VPS to check for noisy neighbors | regular user | VPS | [docs/04-contabo-diagnostics.md](docs/04-contabo-diagnostics.md) |
+| `05-export-from-laptop.sh` | Snapshot Dolt data + ~/.claude into tarballs | regular user | **laptop** | [docs/05-export-from-laptop.md](docs/05-export-from-laptop.md) |
+| `06-migrate-gastown.sh` | Clone ~/gt, restore tarballs, start daemon | regular user | VPS | [docs/06-migrate-gastown.md](docs/06-migrate-gastown.md) |
+| `07-install-tailscale.sh` | Join VPS to tailnet, optionally lock SSH to Tailscale-only | regular user | VPS | [docs/07-install-tailscale.md](docs/07-install-tailscale.md) |
+
+Each per-script doc has: what the script does in detail, how to replicate by hand, why it's built that way, and known gotchas. See [docs/README.md](docs/README.md) for the index.
 
 ## Quick start
 
