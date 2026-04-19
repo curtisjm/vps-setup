@@ -9,12 +9,13 @@ Designed initially for a Contabo VPS 40 (12 vCPU / 48GB RAM / 250GB NVMe) in US 
 | Script | Purpose | Run as | Where |
 |---|---|---|---|
 | `00-harden.sh` | Security hardening (user, SSH, firewall, fail2ban, sysctl) | `root` | VPS |
-| `01-install-dev-tools.sh` | Node, Python, Go, CLI tools, Docker, Claude Code, gt+bd | regular user | VPS |
+| `01-install-dev-tools.sh` | Node, Python, Go, CLI tools, Docker, Claude Code, Codex, Atuin, gt+bd | regular user | VPS |
 | `02-setup-git.sh` | Git config + GitHub SSH key + aliases | regular user | VPS |
 | `03-install-dolt.sh` | Dolt (version-controlled SQL DB for Gas Town beads) | regular user | VPS |
 | `04-contabo-diagnostics.sh` | Benchmark the VPS to check for noisy neighbors | regular user | VPS |
 | `05-export-from-laptop.sh` | Snapshot Dolt data + ~/.claude into tarballs | regular user | **laptop** |
 | `06-migrate-gastown.sh` | Clone ~/gt, restore tarballs, start daemon | regular user | VPS |
+| `07-install-tailscale.sh` | Join VPS to tailnet, optionally lock SSH to Tailscale-only | regular user | VPS |
 
 ## Quick start
 
@@ -51,6 +52,7 @@ source ~/.bashrc              # pick up new PATH and aliases
 ./02-setup-git.sh             # interactive — will pause for you to add key to GitHub
 ./03-install-dolt.sh          # optional tmpfs setup for Contabo speed workaround
 ./04-contabo-diagnostics.sh   # run now to establish baseline; re-run periodically
+./07-install-tailscale.sh     # join the VPS to your tailnet (recommended)
 ```
 
 ## Gas Town migration (laptop → VPS)

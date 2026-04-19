@@ -335,6 +335,52 @@ else
 fi
 
 # ----------------------------------------------------------------------------
+# Step 8a: OpenAI Codex CLI
+# ----------------------------------------------------------------------------
+# Codex is OpenAI's agentic coding CLI — Curtis uses it alongside claude-code,
+# typically with model gpt-5.4 and reasoning_effort=xhigh. Config lives at
+# ~/.codex/config.toml (Claude-equivalent of ~/.claude/).
+#
+# Install via npm (official distribution channel). The package is published
+# as @openai/codex. First auth happens on first run ('codex login').
+
+log "Installing OpenAI Codex CLI..."
+if command -v codex &> /dev/null; then
+    warn "Codex already installed, skipping"
+else
+    npm install -g @openai/codex
+    ok "Codex installed — run 'codex login' to authenticate"
+fi
+
+# ----------------------------------------------------------------------------
+# Step 8b: Atuin — shell history replacement
+# ----------------------------------------------------------------------------
+# Atuin replaces the default shell history with a local sqlite database that
+# supports fuzzy search, per-directory context, and (optionally) E2E-encrypted
+# sync across machines.
+#
+# Why it matters on a VPS: you live in tmux for weeks. With stock bash
+# history, every new pane starts empty and history gets clobbered across
+# panes. Atuin gives you a unified searchable history with fzf-style UI
+# bound to Ctrl-R.
+#
+# Curtis runs Atuin on his laptop via nix-darwin. We install on the VPS
+# using the official installer (puts binary at ~/.atuin/bin/atuin).
+# Sync is OPT-IN — by default, history is local-only, which is the safer
+# default on a shared host. Run 'atuin register' later if you want sync.
+
+log "Installing Atuin (shell history)..."
+if command -v atuin &> /dev/null || [[ -x "$HOME/.atuin/bin/atuin" ]]; then
+    warn "Atuin already installed, skipping"
+else
+    # The installer writes to ~/.atuin, adds PATH export to shell rc,
+    # and installs shell init for bash/zsh/fish. Safe for non-interactive
+    # use (no prompts).
+    curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
+    ok "Atuin installed — the shell-customizations block below wires up the Ctrl-R binding"
+fi
+
+# ----------------------------------------------------------------------------
 # Step 8b: Install Gas Town core binaries (gt + bd)
 # ----------------------------------------------------------------------------
 # gt = orchestrator, bd = issue tracker (Beads). Both are Go binaries installed
@@ -412,6 +458,13 @@ esac
 # direnv hook — loads/unloads .envrc files when you cd into a directory.
 # Used by Gas Town rigs that need GT_DOLT_HOST or per-rig tokens.
 command -v direnv &> /dev/null && eval "$(direnv hook bash)"
+
+# Atuin shell history (better Ctrl-R with fuzzy search, per-dir context).
+# The installer normally adds its own init, but we add it here too so the
+# binding works even on shells that don't source ~/.bashrc's Atuin block
+# (e.g. non-login ssh sessions). Safe to have twice — atuin init is idempotent.
+[[ -x "$HOME/.atuin/bin/atuin" ]] && export PATH="$HOME/.atuin/bin:$PATH"
+command -v atuin &> /dev/null && eval "$(atuin init bash --disable-up-arrow)"
 
 # Useful aliases
 alias ll='ls -alhF --color=auto'
@@ -502,6 +555,8 @@ echo "  ✓ Go $GO_VERSION"
 echo "  ✓ GitHub CLI (gh)"
 echo "  ✓ Docker (you were added to docker group — re-login to use without sudo)"
 echo "  ✓ Claude Code CLI"
+echo "  ✓ OpenAI Codex CLI"
+echo "  ✓ Atuin (Ctrl-R for fuzzy shell history)"
 echo "  ✓ Gas Town: gt + bd (via go install)"
 echo "  ✓ Shell aliases and tmux config"
 echo ""
@@ -512,5 +567,7 @@ echo "Next steps:"
 echo "  1. source ~/.bashrc"
 echo "  2. Run 02-setup-git.sh to configure git and GitHub access"
 echo "  3. Run 'claude' to authenticate Claude Code"
-echo "  4. Run 'gh auth login' to authenticate GitHub CLI"
+echo "  4. Run 'codex login' to authenticate OpenAI Codex"
+echo "  5. Run 'gh auth login' to authenticate GitHub CLI"
+echo "  6. (Optional) 'atuin register' to sync history across machines"
 echo ""
