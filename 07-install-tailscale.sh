@@ -135,11 +135,19 @@ log "  already logged into your Tailscale account."
 echo ""
 
 if tailscale status &> /dev/null && ! tailscale status | grep -qi "logged out"; then
-    warn "Tailscale is already up — checking shields-up state"
+    warn "Tailscale is already up — applying current settings"
     # If a prior run left shields-up enabled, inbound SSH over tailnet would
     # silently fail. Flip it off explicitly. Idempotent if already off.
     sudo tailscale set --shields-up=false 2>/dev/null || true
-    warn "  (to change settings later: sudo tailscale set --ssh / --shields-up=false)"
+    # Apply the user's current SSH preference from the prompt above, even on
+    # rerun. Without this, a user who toggles the prompt answer between runs
+    # would see no change because the 'up' branch was skipped.
+    if [[ -n "$TS_SSH_FLAG" ]]; then
+        sudo tailscale set --ssh=true 2>/dev/null || warn "Could not enable Tailscale SSH"
+    else
+        sudo tailscale set --ssh=false 2>/dev/null || true
+    fi
+    warn "  (to change settings later: sudo tailscale set --ssh=true|false / --shields-up=false)"
 else
     # --shields-up=false: accept inbound (we're the destination, not a client)
     # --accept-dns=true:  use MagicDNS so you can ssh by name instead of IP

@@ -139,9 +139,15 @@ ok "Submodules synced"
 log "Checking for sha256 manifest..."
 
 TARBALL_DIR="$(dirname "$DOLT_TARBALL")"
-MANIFEST=$(ls "$TARBALL_DIR"/MANIFEST-*.sha256 2>/dev/null | head -1 || true)
+# Derive manifest path from the tarball's timestamp so we match the exact
+# export run, not whatever MANIFEST-*.sha256 sorted first. Export names the
+# tarball dolt-data-${STAMP}.tar.gz and the manifest MANIFEST-${STAMP}.sha256.
+TARBALL_BASE="$(basename "$DOLT_TARBALL")"
+STAMP="${TARBALL_BASE#dolt-data-}"
+STAMP="${STAMP%.tar.gz}"
+MANIFEST="$TARBALL_DIR/MANIFEST-${STAMP}.sha256"
 
-if [[ -n "$MANIFEST" && -f "$MANIFEST" ]]; then
+if [[ -f "$MANIFEST" ]]; then
     log "Verifying against $MANIFEST..."
     # shasum -c reads the manifest and checks each file. The manifest uses
     # basenames, so we must run it from the dir where the tarballs live.

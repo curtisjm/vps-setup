@@ -314,7 +314,20 @@ Host github.com
 EOF
     ok "Added github.com entry to ~/.ssh/config"
 else
-    warn "~/.ssh/config already has a github.com entry, skipping"
+    # A github.com block already exists. Make sure it actually points at the
+    # dedicated key we just generated — if it references a different path
+    # (e.g. the user previously set this up by hand with id_ed25519), our
+    # new key will never be used and GitHub auth will silently fall back to
+    # whatever the old block configured.
+    if ssh -G github.com 2>/dev/null | grep -qi "^identityfile .*$(basename "$GITHUB_KEY")"; then
+        warn "~/.ssh/config github.com entry already uses $GITHUB_KEY — skipping"
+    else
+        warn "~/.ssh/config has a github.com entry but it does NOT reference:"
+        warn "    $GITHUB_KEY"
+        warn "Current effective IdentityFile(s) for github.com:"
+        ssh -G github.com 2>/dev/null | awk '/^identityfile /{print "    " $2}' | sed 's|^    '"$HOME"'|    ~|' || true
+        warn "Leaving ~/.ssh/config alone — edit it by hand if you want to switch keys."
+    fi
 fi
 
 # ----------------------------------------------------------------------------
