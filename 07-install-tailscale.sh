@@ -15,9 +15,10 @@
 #   1. Installs Tailscale from its official apt repository (not the snap
 #      version, not the curl-pipe-bash installer — we want signed packages
 #      that get updated by apt alongside everything else).
-#   2. Brings the daemon up with '--ssh' (so you can SSH over tailnet auth
-#      instead of SSH keys if you want) and '--shields-up' (block inbound
-#      connections to this node by default, matching Curtis's nix config).
+#   2. Brings the daemon up in SERVER posture: inbound tailnet connections
+#      are ACCEPTED (so you can ssh from your laptop), outbound routing
+#      from other tailnet devices is not — this VPS is a destination, not
+#      a client or exit node.
 #   3. Optionally locks down UFW to allow SSH ONLY from the tailnet, closing
 #      public port 22 entirely.
 #
@@ -29,15 +30,17 @@
 #   - You'll need a Tailscale account + auth URL (prompted interactively).
 #
 # DESIGN NOTES:
-#   - We use `--shields-up` to match Curtis's laptop posture: the VPS is a
-#     client of the tailnet, not a node that exposes services on it. You
-#     can disable this later with `sudo tailscale set --shields-up=false`
-#     if you want to expose internal services to other devices on the tailnet.
+#   - Curtis's laptop runs Tailscale with '--shields-up' because the laptop
+#     is a CLIENT — it reaches out to other tailnet nodes but doesn't host
+#     anything. This VPS is the opposite: other devices reach IN to it.
+#     So '--shields-up' is deliberately OFF here.
 #   - We DON'T enable Tailscale SSH by default — it's convenient but changes
 #     the auth model (tailnet identity instead of SSH keys). Opt in via the
 #     prompt if you want it.
 #   - We DON'T enable exit-node/subnet-router modes here. That's a separate
 #     use case (using the VPS as a jump box) that deserves its own decision.
+#   - We DON'T '--advertise-routes': nothing on the VPS's local network is
+#     worth exposing to the tailnet.
 
 set -euo pipefail
 
@@ -119,26 +122,31 @@ fi
 # Step 3: Bring Tailscale up (interactive login)
 # ----------------------------------------------------------------------------
 # 'tailscale up' prints an auth URL you open in a browser on any logged-in
-# device. We use --shields-up to match Curtis's laptop posture (block all
-# inbound, act as a pure client). --accept-routes=false because the VPS
-# shouldn't route through anyone else's exit node.
+# device. This VPS is a SERVER — it accepts inbound SSH from tailnet clients
+# (your laptop, phone, etc.). Shields are deliberately OFF so those inbound
+# connections succeed. --accept-routes=false means we don't let other tailnet
+# devices route traffic through this VPS.
 
-log "Bringing Tailscale up..."
-log "  Flags: --shields-up (block inbound to this node) ${TS_SSH_FLAG:+--ssh }"
+log "Bringing Tailscale up in server posture..."
+log "  Flags: --accept-routes=false (don't route for others) ${TS_SSH_FLAG:+--ssh }"
 log ""
 log "  You'll see an auth URL — open it in a browser on a device that's"
 log "  already logged into your Tailscale account."
 echo ""
 
 if tailscale status &> /dev/null && ! tailscale status | grep -qi "logged out"; then
-    warn "Tailscale is already up — skipping login"
-    warn "  (to change settings: sudo tailscale set --shields-up --ssh)"
+    warn "Tailscale is already up — checking shields-up state"
+    # If a prior run left shields-up enabled, inbound SSH over tailnet would
+    # silently fail. Flip it off explicitly. Idempotent if already off.
+    sudo tailscale set --shields-up=false 2>/dev/null || true
+    warn "  (to change settings later: sudo tailscale set --ssh / --shields-up=false)"
 else
-    # --shields-up: refuse inbound connections (client posture, matches laptop)
-    # --accept-dns=true: use MagicDNS so you can ssh by name instead of IP
+    # --shields-up=false: accept inbound (we're the destination, not a client)
+    # --accept-dns=true:  use MagicDNS so you can ssh by name instead of IP
     # --accept-routes=false: don't accept subnet routes advertised by others
+    # --advertise-routes: not used — nothing on this VPS's local net to share
     sudo tailscale up \
-        --shields-up \
+        --shields-up=false \
         --accept-dns=true \
         --accept-routes=false \
         ${TS_SSH_FLAG}
