@@ -97,15 +97,25 @@ for ((i=0; i<CORES; i++)); do
 done
 STRESS_PIDS=$(jobs -p)
 
+# Install a trap so Ctrl+C (or any unexpected exit) kills the stress PIDs
+# and their bc children. Without this the user ends up with a dozen bc
+# processes eating 100% CPU after aborting the script.
+cleanup_stress() {
+    # shellcheck disable=SC2086
+    [[ -n "${STRESS_PIDS:-}" ]] && kill $STRESS_PIDS 2>/dev/null || true
+    # The bash loops fork `bc` as children; nuke any that outlived the loop.
+    pkill -P $$ bc 2>/dev/null || true
+    wait 2>/dev/null || true
+}
+trap 'cleanup_stress; rm -f "$TESTFILE" 2>/dev/null || true' INT TERM EXIT
+
 # Sample vmstat for 60 seconds at 1-second intervals.
 # Column 16 (space-separated) is steal time on modern kernels.
 # We skip the first 2 lines (header and "since boot" summary).
 STEAL_DATA=$(vmstat 1 60 | awk 'NR>2 {print $16}')
 
-# Kill the stress workload
-# shellcheck disable=SC2086
-kill $STRESS_PIDS 2>/dev/null || true
-wait 2>/dev/null || true
+# Kill the stress workload (trap will also run on script exit)
+cleanup_stress
 
 # Compute stats
 STEAL_AVG=$(echo "$STEAL_DATA" | awk '{sum+=$1; count++} END {if(count>0) printf "%.1f", sum/count; else print "0"}')
@@ -147,7 +157,9 @@ SECTION "Disk I/O Benchmarks"
 # Use a test file in /tmp (usually tmpfs) is misleading — we want to test
 # the actual disk. Create in home dir.
 TESTFILE="$HOME/.disktest.$$"
-trap 'rm -f "$TESTFILE"' EXIT
+# Note: the INT/TERM/EXIT trap set earlier (stress cleanup section) already
+# rm -f's $TESTFILE, so we don't install another trap here that would
+# overwrite the stress-cleanup handler.
 
 log "Sequential write test (1GB)..."
 SEQ_WRITE=$(dd if=/dev/zero of="$TESTFILE" bs=1M count=1024 conv=fdatasync 2>&1 | tail -1)

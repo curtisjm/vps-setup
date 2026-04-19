@@ -2,7 +2,7 @@
 
 A small collection of shell scripts for setting up and hardening a fresh Ubuntu/Debian VPS for AI agent workloads (Claude Code, Gas Town, etc.).
 
-Designed initially for a Contabo VPS 40 (12 vCPU / 48GB RAM / 250GB NVMe) in US Central, but should work on any fresh Ubuntu 22.04+ or Debian 12+ system.
+Designed initially for a Contabo VPS 40 (12 vCPU / 48GB RAM / 250GB NVMe) in US Central, but should work on any fresh Ubuntu 22.04+ or Debian 12+ system. The Docker install step in `01-install-dev-tools.sh` auto-detects whether to pull from the Ubuntu or Debian repo via `/etc/os-release`.
 
 ## Scripts
 
@@ -33,7 +33,14 @@ chmod +x 00-harden.sh
 ./00-harden.sh
 ```
 
-The hardening script will prompt you for a username and your SSH public key. **Before it locks down SSH**, it will pause and ask you to verify in a separate terminal that you can log in as the new user. Don't skip that check.
+The hardening script will prompt you for:
+
+1. A username for the new non-root account
+2. Your SSH public key (paste it; ed25519 is recommended)
+3. A password for the new user — required for `sudo`. Not used for SSH login (SSH stays key-only), but the script will refuse to continue without one set
+
+**Before it locks down SSH**, the script pauses and asks you to verify in a
+separate terminal that you can log in as the new user. Don't skip that check.
 
 After hardening completes, log in as your new user:
 
@@ -94,6 +101,17 @@ chmod +x 06-migrate-gastown.sh
 - Consider `gt daemon stop` on the laptop after migration so both machines
   aren't racing on the same bead DB if you briefly share a fork
 
+**On macOS laptops:** `05-export-from-laptop.sh` uses `tar --sparse` to skip
+zeroed regions in the Dolt files (big size savings on a 20GB DB with lots of
+sparse internal files). macOS ships BSD tar, which doesn't understand
+`--sparse`. The script auto-detects and falls back in this order:
+
+1. If `tar` identifies as GNU tar, use it with `--sparse`.
+2. Else, if `gtar` is on PATH (`nix-env -iA nixpkgs.gnutar` or similar),
+   use that with `--sparse`.
+3. Else, fall back to plain `tar` without `--sparse` — still works, just
+   produces a bigger archive.
+
 **Keep both running in parallel for ~a week.** Don't delete anything on the
 laptop until you've confirmed agents work correctly on the VPS across at
 least a full patrol cycle.
@@ -152,7 +170,14 @@ apps, graphics protocols). Fine for pure-text SSH sessions.
 
 ## Design principles
 
-**Idempotent.** Every script should be safe to re-run. If something is already set up, the script should detect that and skip it, not error out or clobber working config. This matters because you'll absolutely need to re-run parts of these as you iterate.
+**Idempotent.** Every script should be safe to re-run. If something is already set up, the script detects that and skips it rather than clobbering working config. Specifically:
+
+- `00-harden.sh` appends SSH keys to `authorized_keys` instead of overwriting; `ufw` rules are additive (no `--force reset`) so rules added later by `07-install-tailscale.sh` survive a rerun.
+- `02-setup-git.sh` manages a BEGIN/END block in `~/.gitignore_global`; edits you make outside those markers are preserved across reruns. It also refuses to overwrite an existing `Host github.com` SSH config block that points to a different key.
+- `03-install-dolt.sh` unsets before `--add`-ing dolt config so user.name/email don't grow duplicate entries on rerun.
+- `07-install-tailscale.sh` applies the current `--ssh` preference even when Tailscale is already logged in (so toggling the prompt answer between runs takes effect).
+
+This matters because you'll absolutely need to re-run parts of these as you iterate.
 
 **Loud failures.** All scripts use `set -euo pipefail` — any unexpected error halts the script rather than silently continuing with half-broken state.
 

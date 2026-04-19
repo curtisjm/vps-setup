@@ -298,14 +298,28 @@ else
     # Remove any old Docker packages that might conflict
     sudo apt-get remove -y -qq docker docker-engine docker.io containerd runc 2>/dev/null || true
 
-    # Set up Docker's official repository
+    # Docker publishes separate apt repos for Ubuntu and Debian — using the
+    # wrong one gives unsigned-repo errors or 404s. Detect which one to use.
+    . /etc/os-release
+    case "${ID:-}" in
+        ubuntu) DOCKER_DISTRO="ubuntu" ;;
+        debian) DOCKER_DISTRO="debian" ;;
+        *)
+            warn "Unsupported distro '${ID:-unknown}' for Docker repo — skipping Docker install"
+            DOCKER_DISTRO=""
+            ;;
+    esac
+fi
+
+if [[ -n "${DOCKER_DISTRO:-}" ]] && ! command -v docker &> /dev/null; then
+    # Set up Docker's official repository for the detected distro.
     sudo install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+    curl -fsSL "https://download.docker.com/linux/${DOCKER_DISTRO}/gpg" | \
         sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     sudo chmod a+r /etc/apt/keyrings/docker.gpg
 
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-        https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        https://download.docker.com/linux/${DOCKER_DISTRO} ${VERSION_CODENAME} stable" | \
         sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
     sudo apt-get update -qq

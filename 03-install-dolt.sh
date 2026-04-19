@@ -107,6 +107,10 @@ if [[ -z "$GIT_NAME" || -z "$GIT_EMAIL" ]]; then
     read -rp "Email: " GIT_EMAIL
 fi
 
+# Dolt's --add appends; on rerun it silently creates duplicate entries. We
+# --unset first (tolerating not-set) then --add to keep the config clean.
+dolt config --global --unset user.name 2>/dev/null || true
+dolt config --global --unset user.email 2>/dev/null || true
 dolt config --global --add user.name "$GIT_NAME"
 dolt config --global --add user.email "$GIT_EMAIL"
 ok "Dolt identity set to $GIT_NAME <$GIT_EMAIL>"
