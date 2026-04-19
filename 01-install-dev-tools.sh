@@ -72,6 +72,9 @@ export DEBIAN_FRONTEND=noninteractive
 # Without these, a LOT of npm/pip installs will fail mysteriously.
 
 log "Installing build essentials and common libraries..."
+# bc is installed here because 04-contabo-diagnostics.sh depends on it for the
+# CPU stress loop ('echo "scale=5000; 4*a(1)" | bc -l') and for float
+# comparisons in the verdict block. Ubuntu Server minimal doesn't ship bc.
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
     build-essential \
@@ -87,7 +90,8 @@ sudo apt-get install -y -qq \
     tk-dev \
     libxml2-dev \
     libxmlsec1-dev \
-    liblzma-dev
+    liblzma-dev \
+    bc
 ok "Build essentials installed"
 
 # ----------------------------------------------------------------------------

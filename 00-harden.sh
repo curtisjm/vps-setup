@@ -168,7 +168,7 @@ log "Creating user: $NEW_USER"
 if id "$NEW_USER" &>/dev/null; then
     warn "User $NEW_USER already exists, skipping creation"
 else
-    # --disabled-password: no password set initially (we'll use SSH keys only)
+    # --disabled-password: no password set initially — we'll set one below.
     # --gecos "": skip the full-name/phone/etc. prompts
     adduser --disabled-password --gecos "" "$NEW_USER"
     ok "User created"
@@ -177,6 +177,50 @@ fi
 # Add user to sudo group. On Debian/Ubuntu this grants full sudo access.
 usermod -aG sudo "$NEW_USER"
 ok "Added $NEW_USER to sudo group"
+
+# ----------------------------------------------------------------------------
+# Step 4b: Set a UNIX password for the new user
+# ----------------------------------------------------------------------------
+# We MUST set a password here even though SSH will only use keys. Reason:
+# sudo on Ubuntu/Debian requires a password by default (defense-in-depth —
+# if someone gets into the account, they still need the password to escalate).
+# Later scripts (01-install-dev-tools.sh) run `sudo -v` which would fail with
+# 'account locked' on a --disabled-password user.
+#
+# If the account already has a usable password set (e.g. on script re-run),
+# we skip the prompt. Detected via `passwd -S`: status field 'P' means a
+# valid password is set; 'L' is locked, 'NP' is no password.
+
+PASSWD_STATUS=$(passwd -S "$NEW_USER" 2>/dev/null | awk '{print $2}' || echo "NP")
+
+if [[ "$PASSWD_STATUS" == "P" ]]; then
+    ok "User $NEW_USER already has a password set — skipping"
+else
+    echo ""
+    log "Set a UNIX password for $NEW_USER (used by sudo; SSH still uses keys only)"
+
+    # Loop until we get two matching non-empty entries. Use -s to suppress
+    # echo. We pipe to chpasswd (faster/quieter than passwd's interactive
+    # prompt, and doesn't require TTY tricks).
+    while true; do
+        read -rsp "Password: " USER_PASSWORD; echo ""
+        read -rsp "Confirm:  " USER_PASSWORD_CONFIRM; echo ""
+        if [[ -z "$USER_PASSWORD" ]]; then
+            error "Password cannot be empty — try again"
+            continue
+        fi
+        if [[ "$USER_PASSWORD" != "$USER_PASSWORD_CONFIRM" ]]; then
+            error "Passwords don't match — try again"
+            continue
+        fi
+        break
+    done
+
+    echo "$NEW_USER:$USER_PASSWORD" | chpasswd
+    # Wipe the plaintext from env as soon as it's set — defense in depth.
+    unset USER_PASSWORD USER_PASSWORD_CONFIRM
+    ok "Password set for $NEW_USER"
+fi
 
 # ----------------------------------------------------------------------------
 # Step 5: Set up SSH key for the new user

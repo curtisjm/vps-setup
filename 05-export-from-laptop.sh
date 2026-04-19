@@ -183,7 +183,24 @@ DOLT_TARBALL="$OUT_DIR/dolt-data-${STAMP}.tar.gz"
 log "Creating Dolt tarball: $DOLT_TARBALL"
 log "  (this can take a minute — $(du -sh "$DOLT_DATA" | awk '{print $1}') of data)"
 
-tar --sparse -C "$GT_ROOT" -czf "$DOLT_TARBALL" .dolt-data
+# Pick the right tar binary. BSD tar (macOS default) doesn't support --sparse,
+# only GNU tar does. If the user has `brew install gnu-tar`, gtar is available.
+# Otherwise fall back to plain tar — sparse files in Dolt storage are usually
+# small enough that losing the optimization is fine. The archive still extracts
+# correctly; it may just be larger and take marginally longer to create.
+TAR_FLAGS=(-C "$GT_ROOT" -czf "$DOLT_TARBALL" .dolt-data)
+
+if tar --version 2>&1 | grep -qi 'gnu tar'; then
+    # Linux or macOS with GNU tar as default (unusual but possible)
+    tar --sparse "${TAR_FLAGS[@]}"
+elif command -v gtar &> /dev/null; then
+    # macOS with homebrew gnu-tar — preferred path on Curtis's laptop
+    gtar --sparse "${TAR_FLAGS[@]}"
+else
+    warn "GNU tar not found — creating archive without --sparse"
+    warn "  (for smaller archives: brew install gnu-tar)"
+    tar "${TAR_FLAGS[@]}"
+fi
 
 ok "Dolt tarball created: $(du -sh "$DOLT_TARBALL" | awk '{print $1}')"
 
