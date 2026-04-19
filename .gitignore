@@ -1,0 +1,28 @@
+# Migration artifacts produced by 05-export-from-laptop.sh.
+# These tarballs contain live Dolt data and possibly Claude auth tokens —
+# never commit them. They're large, time-bound, and secret-bearing.
+gt-migration/
+dolt-data-*.tar.gz
+claude-*.tar.gz
+MANIFEST-*.sha256
+
+# Ad-hoc test output from running scripts locally (fio test files, benchmark
+# artifacts, etc.) that can end up in this dir if someone runs the scripts
+# in place rather than on a VPS.
+*.log
+*.bak
+*.backup.*
+.fiotest
+.disktest.*
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Anything prefixed LOCAL- is treated as throwaway (e.g. LOCAL-notes.md for
+# machine-specific reminders you don't want to publish).
+LOCAL-*
