@@ -232,14 +232,26 @@ fi
 
 log "Setting up SSH key for $NEW_USER..."
 USER_HOME="/home/$NEW_USER"
+AUTH_KEYS="$USER_HOME/.ssh/authorized_keys"
 mkdir -p "$USER_HOME/.ssh"
-echo "$SSH_PUBKEY" > "$USER_HOME/.ssh/authorized_keys"
+touch "$AUTH_KEYS"
+
+# Append-if-missing rather than overwrite. Overwriting would silently wipe
+# any other keys the user (or a previous run of this script with a different
+# public key) had added. grep -qxF matches the full line literally, so
+# trailing comments or whitespace don't accidentally mask a real match.
+if grep -qxF "$SSH_PUBKEY" "$AUTH_KEYS"; then
+    warn "SSH key already present in authorized_keys — skipping"
+else
+    echo "$SSH_PUBKEY" >> "$AUTH_KEYS"
+    ok "SSH key appended to authorized_keys"
+fi
 
 # 700 on .ssh dir, 600 on authorized_keys — sshd requires these exact perms
 # or it will silently refuse to use the key and fall back to password auth
 # (which we're about to disable, so you'd be locked out).
 chmod 700 "$USER_HOME/.ssh"
-chmod 600 "$USER_HOME/.ssh/authorized_keys"
+chmod 600 "$AUTH_KEYS"
 chown -R "$NEW_USER:$NEW_USER" "$USER_HOME/.ssh"
 ok "SSH key installed for $NEW_USER"
 
@@ -350,12 +362,19 @@ ok "SSH hardened (port $SSH_PORT, root disabled, password auth disabled)"
 # instead of opening them to the internet.
 
 log "Configuring UFW firewall..."
-ufw --force reset  # Start from clean state
+# Additive, not destructive. 'ufw --force reset' wipes ALL rules — including
+# ones added by later scripts (e.g., 07-install-tailscale.sh narrows SSH to
+# the Tailscale CGNAT range). Re-running 00 would silently undo that lockdown.
+#
+# Instead: set defaults (idempotent), allow our SSH port (idempotent — ufw
+# deduplicates), and enable. Existing rules are preserved.
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow "$SSH_PORT/tcp" comment 'SSH'
+# --force enable skips the interactive "are you sure" prompt. ufw is fine
+# with this being called on an already-enabled firewall.
 ufw --force enable
-ok "Firewall enabled (only port $SSH_PORT open for SSH)"
+ok "Firewall enabled (port $SSH_PORT open for SSH; existing rules preserved)"
 
 # ----------------------------------------------------------------------------
 # Step 10: Configure fail2ban

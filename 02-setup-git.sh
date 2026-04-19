@@ -180,12 +180,24 @@ ok "Git aliases configured"
 # .gitignore for project-specific stuff, but this catches the universally-
 # dangerous ones (secrets, editor files, OS cruft).
 
-log "Creating global .gitignore..."
+log "Updating global .gitignore..."
 
-cat > "$HOME/.gitignore_global" <<'EOF'
-# ~/.gitignore_global
+# Managed-block pattern: we own everything between BEGIN/END markers, but any
+# content the user adds OUTSIDE those markers is preserved. This matters
+# because on re-run we'd otherwise clobber personal additions the user made
+# to ~/.gitignore_global (e.g., project-specific patterns, tool-specific
+# ignores we didn't think of).
+
+GITIGNORE="$HOME/.gitignore_global"
+BEGIN_MARK="# === vps-setup managed block — do not edit between markers ==="
+END_MARK="# === end vps-setup managed block ==="
+
+# The block we own. Anything the user wants to PERSIST across script reruns
+# should go OUTSIDE these markers.
+read -r -d '' MANAGED_BLOCK <<EOF || true
+$BEGIN_MARK
 # Files that should never be committed to any repo.
-# Per-repo .gitignore is still needed for project-specific stuff.
+# Edit vps-setup/02-setup-git.sh to change; user-added rules go outside this block.
 
 # ----- Secrets (MOST IMPORTANT — never commit these) -----
 .env
@@ -200,44 +212,30 @@ credentials.json
 .netrc
 
 # ----- Editor/IDE files -----
-# Vim
 *.swp
 *.swo
 *~
 .*.swp
 .*.swo
-
-# Emacs
-\#*\#
-.\#*
-
-# VSCode (but keep .vscode/ dirs that projects want to commit)
+\\#*\\#
+.\\#*
 .vscode/*.log
-
-# JetBrains IDEs
 .idea/
 *.iml
-
-# Sublime
 *.sublime-project
 *.sublime-workspace
 
 # ----- OS files -----
-# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
-
-# Linux
 .directory
 .Trash-*
-
-# Windows
 Thumbs.db
 Desktop.ini
 
-# ----- Build artifacts (usually handled per-repo but good catches) -----
+# ----- Build artifacts -----
 *.log
 *.pid
 *.seed
@@ -247,10 +245,30 @@ Desktop.ini
 .claude/
 .cursor/
 .aider*
-
+$END_MARK
 EOF
 
-ok "Global .gitignore created at ~/.gitignore_global"
+# Create the file if it doesn't exist, then surgically replace (or append)
+# the managed block. awk is the cleanest way to do this block-replace since
+# sed's handling of multi-line content is fussy.
+touch "$GITIGNORE"
+
+if grep -qF "$BEGIN_MARK" "$GITIGNORE"; then
+    # Block exists — replace its contents in place.
+    awk -v begin="$BEGIN_MARK" -v end="$END_MARK" -v block="$MANAGED_BLOCK" '
+        $0 == begin { print block; skip = 1; next }
+        $0 == end   { skip = 0; next }
+        !skip       { print }
+    ' "$GITIGNORE" > "$GITIGNORE.tmp"
+    mv "$GITIGNORE.tmp" "$GITIGNORE"
+    ok "Managed block updated in $GITIGNORE"
+else
+    # Block doesn't exist — append it. If the file is non-empty, add a blank
+    # line first so the block stays visually separated.
+    [[ -s "$GITIGNORE" ]] && echo "" >> "$GITIGNORE"
+    echo "$MANAGED_BLOCK" >> "$GITIGNORE"
+    ok "Managed block appended to $GITIGNORE"
+fi
 
 # ----------------------------------------------------------------------------
 # Step 5: Generate SSH key for GitHub
