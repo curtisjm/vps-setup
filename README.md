@@ -114,6 +114,42 @@ Host my-vps
 
 Then you can just `ssh my-vps` from anywhere.
 
+## Fixing "Error opening terminal: xterm-ghostty"
+
+If your local terminal is **Ghostty** (or any terminal with a custom `TERM`
+like `xterm-kitty`, `wezterm`, etc.), ncurses apps on the VPS (tmux, btop,
+htop, less) will fail with:
+
+```
+Error opening terminal: xterm-ghostty.
+```
+
+Your terminal sends `TERM=xterm-ghostty` over SSH, but the VPS has no
+terminfo entry for it. Fix from your **laptop** (Ghostty must be installed
+locally — the laptop has the terminfo, the VPS doesn't):
+
+```bash
+# One-liner: export terminfo on laptop, compile into ~/.terminfo on VPS
+infocmp -x xterm-ghostty | ssh my-vps -- tic -x -
+
+# Verify
+ssh my-vps -- infocmp xterm-ghostty | head -3
+```
+
+This installs the terminfo into the VPS user's `~/.terminfo/` — no root
+needed, doesn't affect other users. Same pattern works for other terminals:
+replace `xterm-ghostty` with `xterm-kitty`, `wezterm`, etc.
+
+**Fallback** (if you can't install terminfo): add to your laptop's
+`~/.ssh/config` under the VPS host block:
+
+```
+SetEnv TERM=xterm-256color
+```
+
+Works instantly but drops terminal-specific features (true color in some
+apps, graphics protocols). Fine for pure-text SSH sessions.
+
 ## Design principles
 
 **Idempotent.** Every script should be safe to re-run. If something is already set up, the script should detect that and skip it, not error out or clobber working config. This matters because you'll absolutely need to re-run parts of these as you iterate.
