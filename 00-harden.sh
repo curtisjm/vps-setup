@@ -70,6 +70,37 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+restart_ssh_service() {
+    # Debian/Ubuntu commonly expose OpenSSH as ssh.service, while other
+    # distros often use sshd.service. Detect what's actually present instead
+    # of hard-coding one unit name and aborting mid-hardening.
+    if command -v systemctl &>/dev/null; then
+        if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'ssh.service'; then
+            systemctl restart ssh
+            return 0
+        fi
+        if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'sshd.service'; then
+            systemctl restart sshd
+            return 0
+        fi
+    fi
+
+    if command -v service &>/dev/null; then
+        if service ssh status >/dev/null 2>&1; then
+            service ssh restart
+            return 0
+        fi
+        if service sshd status >/dev/null 2>&1; then
+            service sshd restart
+            return 0
+        fi
+    fi
+
+    error "Could not determine the SSH service name (tried ssh and sshd)."
+    return 1
+}
+# end restart_ssh_service
+
 # ----------------------------------------------------------------------------
 # Step 1: Gather user input upfront
 # ----------------------------------------------------------------------------
@@ -463,7 +494,7 @@ if ! sshd -t; then
     exit 1
 fi
 
-systemctl restart sshd
+restart_ssh_service || exit 1
 ok "SSH hardened (port $SSH_PORT, root disabled, pubkey-or-password+TOTP)"
 
 # ----------------------------------------------------------------------------

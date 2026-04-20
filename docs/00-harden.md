@@ -27,7 +27,7 @@ The script is a top-to-bottom walk through "bare minimum hardening for a persona
 9. **Stop-and-verify gate (pubkey path).** Prints a big warning and asks the user to confirm (in a second terminal) that they can SSH in as the new user with their key, *before* the script disables root login and changes sshd. Skipping this is how people lock themselves out.
 10. **Hardens sshd.** Backs up `/etc/ssh/sshd_config` with a timestamp, then uses a `set_ssh_option` helper to remove any existing line for each key (commented or not) and append the new one. Settings applied: custom `Port`, `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication yes`, `UsePAM yes`, `PubkeyAuthentication yes`, `PermitEmptyPasswords no`, `X11Forwarding no`, `MaxAuthTries 3`, `ClientAliveInterval 300` / `ClientAliveCountMax 2`, `AllowUsers <new-user>`, `AuthenticationMethods "publickey keyboard-interactive:pam"`.
 11. **Step 8b: configures PAM for TOTP.** Edits `/etc/pam.d/sshd` to append `auth required pam_google_authenticator.so` immediately after the existing `@include common-auth` line. Order matters: common-auth runs first (password check) then the TOTP module (code check). A marker comment makes the edit idempotent — reruns detect it and skip. The original `/etc/pam.d/sshd` is backed up with a timestamp before modification. No `nullok` flag, on purpose: if the user never enrolled TOTP, their keyboard-interactive path refuses login rather than quietly falling back to password-only.
-12. **Validates sshd then restarts.** `sshd -t` before `systemctl restart sshd` — if validation fails we abort without restarting, so the existing session keeps working while you fix it.
+12. **Validates sshd then restarts.** `sshd -t` before restarting the live SSH service. The script now detects whether this host exposes OpenSSH as `ssh.service` or `sshd.service` and restarts the one that actually exists. If validation fails we abort without restarting, so the existing session keeps working while you fix it.
 13. **Step 8c: second verify gate (password+TOTP path).** Optional but strongly encouraged. Prints an `ssh` command with `PreferredAuthentications=keyboard-interactive` and `PubkeyAuthentication=no` that forces the password+TOTP path. If the user confirms it worked, great; if they skip, the pubkey path still works and they can debug TOTP later. Non-fatal.
 14. **Configures UFW.** Sets `default deny incoming` / `default allow outgoing`, opens the chosen SSH port with a comment, then `ufw --force enable`. Deliberately additive — no `ufw --force reset` — so any rules you add later survive a rerun of 00.
 15. **Configures fail2ban.** Writes `/etc/fail2ban/jail.local` with a `[DEFAULT]` section (`bantime=3600`, `findtime=600`, `maxretry=5`) and an `[sshd]` section that points at the custom port. Uses `jail.local` (not `jail.conf`) because `jail.conf` is owned by the package and gets overwritten on upgrade.
@@ -104,7 +104,14 @@ cp /etc/pam.d/sshd /etc/pam.d/sshd.backup.$(date +%Y%m%d-%H%M%S)
 # No 'nullok' — users without ~/.google_authenticator can't use password path.
 sed -i '/^@include common-auth/a auth required pam_google_authenticator.so' /etc/pam.d/sshd
 
-sshd -t && systemctl restart sshd
+sshd -t
+if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'ssh.service'; then
+    systemctl restart ssh
+elif systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'sshd.service'; then
+    systemctl restart sshd
+else
+    service ssh restart || service sshd restart
+fi
 
 # --- Test password+TOTP path (from another terminal) ---
 # ssh -o PreferredAuthentications=keyboard-interactive \
@@ -181,7 +188,7 @@ timedatectl set-timezone America/Los_Angeles
 - **No `nullok` on pam_google_authenticator.** If a user somehow ends up without `~/.google_authenticator`, the password path fails closed rather than accepting password-only. Bootstrap order in the script (enroll TOTP before flipping PAM on) ensures the primary user never hits this.
 - **Authenticator app choice is the user's.** TOTP is RFC 6238 standard. `libpam-google-authenticator` on the server talks to any compliant client — Authy, 1Password, Bitwarden, Microsoft Authenticator, etc. Keeping this open means the user can use whatever password manager they already trust.
 - **fail2ban stays in the picture.** Even with no password-only path, bots will still hammer sshd; fail2ban keeps logs quieter and blocks brute-force attempts against the password+TOTP path (3 tries per 30s from `google-authenticator --rate-limit` is a backup, not the primary throttle).
-- **Validate `sshd -t` before restarting.** A typo in `sshd_config` + a blind `systemctl restart sshd` has locked out more people than any actual attack.
+- **Validate `sshd -t` before restarting.** A typo in `sshd_config` + a blind service restart has locked out more people than any actual attack.
 - **Two verification gates.** Gate 1 (before sshd restart) confirms key login works — non-skippable because skipping risks lockout. Gate 2 (after restart) confirms password+TOTP works — skippable because pubkey still works either way.
 - **Additive UFW, not reset.** Any rules you add later layer on top of 00's base rules. A `ufw reset` in 00 would silently undo them every time you rerun hardening.
 - **`sudo` requires password even with key-based SSH.** A common rookie move is `NOPASSWD:ALL` in sudoers — it turns a cheap SSH key compromise into immediate root. The default (password-required) is correct; the script leaves it alone.
