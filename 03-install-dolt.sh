@@ -43,6 +43,11 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+ensure_local_bin_dir() {
+    mkdir -p "$HOME/.local/bin"
+}
+# end ensure_local_bin_dir
+
 # ----------------------------------------------------------------------------
 # Step 1: Install Dolt binary
 # ----------------------------------------------------------------------------
@@ -141,6 +146,7 @@ if [[ "$SETUP_TMPFS" == "y" || "$SETUP_TMPFS" == "Y" ]]; then
     PERSIST_DIR="$HOME/dolt-persistent"
 
     mkdir -p "$TMPFS_DIR" "$PERSIST_DIR"
+    ensure_local_bin_dir
 
     # Check if tmpfs is already mounted there
     if mountpoint -q "$TMPFS_DIR"; then

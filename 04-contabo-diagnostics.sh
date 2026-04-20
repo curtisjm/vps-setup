@@ -42,6 +42,46 @@ ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 bad()  { echo -e "${RED}[✗]${NC} $1"; }
 
+capture_ping_latency() {
+    local host="$1"
+    local output=""
+    local latency=""
+
+    output="$(ping -c 5 -q "$host" 2>/dev/null || true)"
+    latency="$(printf '%s\n' "$output" | awk -F'/' 'END {print $5}')"
+
+    [[ -n "$latency" ]] && printf '%s\n' "$latency"
+    return 0
+}
+# end capture_ping_latency
+
+capture_ping_packet_loss() {
+    local host="$1"
+    local output=""
+    local loss=""
+
+    output="$(ping -c 20 -q "$host" 2>/dev/null || true)"
+    loss="$(printf '%s\n' "$output" | awk -F', ' '/packet loss/ { sub(/% packet loss.*/, "", $3); print $3; exit }')"
+
+    [[ -n "$loss" ]] && printf '%s\n' "$loss"
+    return 0
+}
+# end capture_ping_packet_loss
+
+capture_cloudflare_download_speed() {
+    local raw_speed=""
+
+    raw_speed="$(curl -o /dev/null -s -w '%{speed_download}\n' \
+        https://speed.cloudflare.com/__down?bytes=104857600 2>/dev/null || true)"
+
+    if [[ "$raw_speed" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        awk -v bytes_per_second="$raw_speed" 'BEGIN { printf "%.1f MB/s\n", bytes_per_second/1024/1024 }'
+    fi
+
+    return 0
+}
+# end capture_cloudflare_download_speed
+
 SECTION() {
     echo ""
     echo "========================================================================"
@@ -237,7 +277,7 @@ SECTION "Network"
 
 log "Latency to common endpoints..."
 for host in api.anthropic.com api.openai.com github.com 1.1.1.1; do
-    LATENCY=$(ping -c 5 -q "$host" 2>/dev/null | awk -F'/' 'END {print $5}')
+    LATENCY="$(capture_ping_latency "$host")"
     if [[ -n "$LATENCY" ]]; then
         echo "  $host: ${LATENCY}ms avg"
     else
@@ -246,8 +286,11 @@ for host in api.anthropic.com api.openai.com github.com 1.1.1.1; do
 done
 
 log "Checking for packet loss (20 pings to 1.1.1.1)..."
-LOSS=$(ping -c 20 -q 1.1.1.1 2>/dev/null | grep -oP '\d+(?=% packet loss)')
-if [[ "$LOSS" == "0" ]]; then
+LOSS="$(capture_ping_packet_loss 1.1.1.1)"
+if [[ -z "$LOSS" ]]; then
+    warn "Packet loss probe failed"
+    VERDICT_NOTES+=("Couldn't measure packet loss to 1.1.1.1. Re-run diagnostics when ICMP is available.")
+elif [[ "$LOSS" == "0" ]]; then
     ok "No packet loss"
 else
     warn "$LOSS% packet loss to 1.1.1.1"
@@ -266,10 +309,12 @@ if command -v speedtest-cli &> /dev/null; then
     speedtest-cli --simple 2>/dev/null || warn "Speedtest failed"
 else
     log "Downloading 100MB from Cloudflare for a rough throughput number..."
-    DOWN_SPEED=$(curl -o /dev/null -s -w '%{speed_download}\n' \
-        https://speed.cloudflare.com/__down?bytes=104857600 | \
-        awk '{printf "%.1f MB/s\n", $1/1024/1024}')
-    echo "  Cloudflare download: $DOWN_SPEED"
+    DOWN_SPEED="$(capture_cloudflare_download_speed)"
+    if [[ -n "$DOWN_SPEED" ]]; then
+        echo "  Cloudflare download: $DOWN_SPEED"
+    else
+        warn "Cloudflare download test failed"
+    fi
 fi
 
 # ----------------------------------------------------------------------------

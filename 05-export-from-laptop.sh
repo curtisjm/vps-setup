@@ -58,6 +58,44 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+build_restore_command() {
+    local stamp="$1"
+    local include_claude="$2"
+
+    if [[ "$include_claude" == "yes" ]]; then
+        echo "./06-migrate-gastown.sh ~/dolt-data-${stamp}.tar.gz ~/claude-${stamp}.tar.gz"
+    else
+        echo "./06-migrate-gastown.sh ~/dolt-data-${stamp}.tar.gz"
+    fi
+}
+# end build_restore_command
+
+git_repo_has_uncommitted_changes() {
+    local repo="$1"
+
+    git -C "$repo" status --porcelain --ignore-submodules=none 2>/dev/null | grep -q .
+}
+# end git_repo_has_uncommitted_changes
+
+git_repo_is_ahead_of_upstream() {
+    local repo="$1"
+    local ahead=""
+
+    git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1 || return 1
+    ahead="$(git -C "$repo" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)"
+
+    [[ "$ahead" =~ ^[0-9]+$ ]] && [[ "$ahead" -gt 0 ]]
+}
+# end git_repo_is_ahead_of_upstream
+
+git_repo_branch_has_no_upstream() {
+    local repo="$1"
+
+    git -C "$repo" symbolic-ref -q HEAD >/dev/null 2>&1 || return 1
+    ! git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1
+}
+# end git_repo_branch_has_no_upstream
+
 # Output directory — defaults to ./gt-migration but caller can override.
 # Artifacts are timestamped so multiple exports don't clobber each other.
 OUT_DIR="${1:-$PWD/gt-migration}"
@@ -115,26 +153,50 @@ fi
 
 # Check for polecat worktrees with unpushed commits — witness normally catches
 # these, but a final sweep before migration is prudent.
-log "Scanning polecat worktrees for unpushed work..."
-UNPUSHED_FOUND=0
-while IFS= read -r -d '' worktree; do
-    if [[ -d "$worktree/.git" || -f "$worktree/.git" ]]; then
-        # Suppress errors from detached HEADs that have no upstream
-        AHEAD=$(git -C "$worktree" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
-        if [[ "$AHEAD" -gt 0 ]]; then
-            warn "Unpushed commits in: $worktree ($AHEAD commits ahead of upstream)"
-            UNPUSHED_FOUND=$((UNPUSHED_FOUND + 1))
-        fi
+log "Scanning ~/gt, submodules, and polecat worktrees for local-only git work..."
+LOCAL_DRIFT_FOUND=0
+
+check_repo_for_local_drift() {
+    local repo="$1"
+    local ahead=""
+
+    [[ -d "$repo/.git" || -f "$repo/.git" ]] || return 0
+
+    if git_repo_has_uncommitted_changes "$repo"; then
+        warn "Uncommitted changes in: $repo"
+        LOCAL_DRIFT_FOUND=$((LOCAL_DRIFT_FOUND + 1))
     fi
+
+    if git_repo_is_ahead_of_upstream "$repo"; then
+        ahead="$(git -C "$repo" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)"
+        warn "Unpushed commits in: $repo ($ahead commits ahead of upstream)"
+        LOCAL_DRIFT_FOUND=$((LOCAL_DRIFT_FOUND + 1))
+    elif git_repo_branch_has_no_upstream "$repo"; then
+        warn "Current branch in $repo has no upstream configured"
+        LOCAL_DRIFT_FOUND=$((LOCAL_DRIFT_FOUND + 1))
+    fi
+}
+
+check_repo_for_local_drift "$GT_ROOT"
+
+if git -C "$GT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    while IFS= read -r submodule; do
+        [[ -n "$submodule" ]] || continue
+        check_repo_for_local_drift "$submodule"
+    done < <(git -C "$GT_ROOT" submodule foreach --quiet 'printf "%s\n" "$toplevel/$sm_path"' 2>/dev/null || true)
+fi
+
+while IFS= read -r -d '' worktree; do
+    check_repo_for_local_drift "$worktree"
 done < <(find "$GT_ROOT" -maxdepth 4 -type d -name "polecats" -print0 2>/dev/null | xargs -0 -I {} find {} -maxdepth 2 -type d -print0 2>/dev/null)
 
-if [[ "$UNPUSHED_FOUND" -gt 0 ]]; then
-    warn "$UNPUSHED_FOUND polecat worktree(s) have unpushed commits."
-    warn "These will be lost if you don't push them before migration."
+if [[ "$LOCAL_DRIFT_FOUND" -gt 0 ]]; then
+    warn "$LOCAL_DRIFT_FOUND local git drift issue(s) detected under $GT_ROOT."
+    warn "Commit and push what you need before migration, or those changes stay laptop-only."
     read -rp "Continue anyway? [y/N] " CONT
     [[ "$CONT" == "y" || "$CONT" == "Y" ]] || { warn "Aborting — push commits and rerun"; exit 0; }
 else
-    ok "No unpushed polecat commits detected"
+    ok "No uncommitted or unpushed git work detected under $GT_ROOT"
 fi
 
 # ----------------------------------------------------------------------------
@@ -269,7 +331,7 @@ ls -lh "$OUT_DIR" | grep -E "${STAMP}"
 echo ""
 echo "Next steps:"
 echo ""
-echo "  1. PUSH any uncommitted work in ~/gt (the VPS will 'git clone' this repo):"
+echo "  1. COMMIT and PUSH any local work in ~/gt before decommissioning the laptop:"
 echo "       cd ~/gt && git status"
 echo "       cd ~/gt && git push  # if you have commits"
 echo "       # same for submodules that have drift"
@@ -278,6 +340,6 @@ echo "  2. SHIP the tarballs to the VPS (replace <vps> with your SSH host):"
 echo "       scp $OUT_DIR/*-${STAMP}.* <vps>:~/"
 echo ""
 echo "  3. On the VPS, run:"
-echo "       ./06-migrate-gastown.sh ~/dolt-data-${STAMP}.tar.gz ~/claude-${STAMP}.tar.gz"
+echo "       $(build_restore_command "$STAMP" "$([[ -n "$CLAUDE_TARBALL" ]] && echo yes || echo no)")"
 echo ""
 echo "Your laptop Gas Town is $([[ "$DOLT_WAS_RUNNING" -eq 1 ]] && echo 'being restarted now' || echo 'untouched')."

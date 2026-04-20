@@ -7,13 +7,17 @@
 
 1. **Pre-flight.** Warns (not errors) if not running on macOS — the script is written and tested on a macOS laptop, but the logic is portable. Looks up `GT_TOWN_ROOT` (defaults to `~/gt`), verifies the directory and `~/gt/.dolt-data/` both exist, and that `gt` is on PATH (if missing, it warns but continues — you just lose the clean daemon stop).
 2. **In-flight agent check.** If `bd` is available, counts beads with status `in_progress`. If non-zero, prompts for confirmation. Rationale: a cold snapshot mid-task captures inconsistent state (bead marked in_progress without a completing commit) — not fatal, but worth flagging.
-3. **Unpushed polecat scan.** Walks `~/gt/*/polecats/*/` worktrees looking for local commits ahead of upstream (`git rev-list --count @{upstream}..HEAD`). If any are found, warns and requires an explicit y/N to continue — commits not pushed to GitHub will be lost the moment you decommission the laptop, because the VPS reconstructs `~/gt` by `git clone`, not by tarball.
+3. **Local git-drift scan across `~/gt`.** Checks the main `~/gt` repo, initialized submodules, and `*/polecats/*/` worktrees for:
+   - uncommitted changes (`git status --porcelain --ignore-submodules=none`)
+   - commits ahead of upstream (`git rev-list --count @{upstream}..HEAD`)
+   - branches with no upstream configured
+   If any of those are found, warns and requires an explicit y/N to continue — the VPS reconstructs `~/gt` by `git clone`, so local-only git work stays on the laptop unless you commit and push it first.
 4. **Stops Dolt cleanly.** Checks `gt dolt status` for "is running"; if so, runs `gt dolt stop` and sleeps 2 seconds for the pid file to clear. Records `DOLT_WAS_RUNNING=1` and installs an `EXIT` trap that always restarts Dolt at the end, even on error — never leaves the laptop in a half-broken state.
 5. **Tars `.dolt-data/`.** Timestamp format `YYYYMMDD-HHMMSS`. Archive path: `<out-dir>/dolt-data-<stamp>.tar.gz`. Tar root is `$GT_ROOT` so the archive extracts to `./.dolt-data/` (portable across VPSes whose `$GT_TOWN_ROOT` might differ from the laptop's).
    - `--sparse` handling is tiered: prefer `tar --sparse` if the default `tar` is GNU tar (rare on macOS, common on Linux); else try `gtar` (installed via `brew install gnu-tar`); else fall back to plain tar without `--sparse` and warn. Sparse files in Dolt storage are usually small enough that the optimization isn't critical, but larger archives are slower to scp.
 6. **Tars `~/.claude/`.** Excludes `shell-snapshots/`, `ide/`, `statsig/`, `todos/`, `__store.db` — all transient or personal analytics that waste bytes. Auth tokens do get included, which is fine on a single-user setup; if you'd rather re-authenticate on the VPS, simply don't pass this tarball to `06-migrate-gastown.sh`.
 7. **sha256 manifest.** Runs `shasum -a 256` against each tarball (basenames, not paths, because the VPS side will `cd $TARBALL_DIR` before verifying). Writes to `<out-dir>/MANIFEST-<stamp>.sha256`.
-8. **Prints next steps.** The exact `scp` command and the exact `06-migrate-gastown.sh` invocation with the timestamped filenames filled in. The less you have to think at 2 AM, the better.
+8. **Prints next steps.** The exact `scp` command and the exact `06-migrate-gastown.sh` invocation with the timestamped filenames filled in. If `~/.claude` was missing and no Claude tarball was created, the printed restore command omits the optional second argument instead of telling you to restore a file that doesn't exist.
 
 ## Replicate manually (no script)
 
@@ -85,12 +89,12 @@ scp "$OUT_DIR"/*-"$STAMP".* my-vps:~/
 - **Exit trap restarts Dolt.** If the tarball step fails, the trap still fires — you don't come back to a laptop with a stopped Dolt daemon and a confused gastown.
 - **sha256 manifest.** scp corruption is rare but real, especially across sketchy links. Having the VPS verify before extracting catches it immediately; no manifest would mean you find out when Dolt fails to open a subtly-corrupted blob a week later.
 - **Timestamp in every filename.** Lets you run the export multiple times during validation without clobbering the previous attempt. Also disambiguates on the VPS side — `06-migrate-gastown.sh` derives the manifest filename from the tarball's timestamp, so the right manifest always matches the right tarball.
-- **Unpushed-polecat scan.** A subtle failure mode: a polecat worktree has a local branch with un-pushed commits. The Dolt DB knows the polecat exists (bead state), and `~/gt` is cloned cleanly from GitHub, but the polecat's work is only in the laptop's git. Flagging before export gives you a chance to push.
+- **Scan all the laptop-only git state, not just the obvious worktrees.** A subtle failure mode is "the main `~/gt` checkout has uncommitted changes" or "a submodule has local commits" even though the polecat worktrees are clean. The export now checks the main repo, submodules, and polecat worktrees because all of them are reconstructed on the VPS from GitHub, not from the tarball.
 
 ## Known gotchas
 
 - **macOS BSD tar doesn't do `--sparse`.** Without `gtar`, the archive is bigger (and takes longer to scp) than it needs to be. `brew install gnu-tar` is one command. The script auto-detects and warns.
 - **The in-progress bead check requires `bd` on PATH.** If you haven't sourced `~/.bashrc` or `bd` isn't installed locally, the check silently skips.
-- **Unpushed-commit detection only walks `*/polecats/*/`.** If you have ad-hoc worktrees elsewhere (e.g. `~/gt/tmp/scratch-branch`), they're not scanned. Run `git -C <path> status` on anything you care about before exporting.
+- **Ad-hoc worktrees outside `~/gt` still aren't scanned.** If you have scratch repos or worktrees elsewhere on the laptop, this script won't find them. Run `git -C <path> status` on anything outside `~/gt` that you care about before exporting.
 - **Auth tokens in `~/.claude` are transferred as-is.** Fine for personal use; think twice before tarballing `~/.claude` on a shared or work machine.
 - **The restart at the end needs `gt` on PATH** — the script errors to stderr if it can't and leaves Dolt stopped; you'd run `gt dolt start` manually.

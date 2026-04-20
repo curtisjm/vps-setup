@@ -11,6 +11,7 @@
 4. **Identity.** Reads `git config --global user.name/email`, prompts if empty. Then `--unset`s existing `user.name`/`user.email` from Dolt's global config (tolerating "not set") and `--add`s the new values. The `--unset`-first pattern is important: Dolt's `--add` appends to a list, so reruns accumulate duplicate entries in the config file, which eventually confuses `dolt commit` about whose identity to use.
 5. **Optional tmpfs.** Prompts whether to set up a 4 GB tmpfs at `~/dolt-tmpfs` and a paired `~/dolt-persistent` disk dir. If yes:
    - Creates both dirs.
+   - Ensures `~/.local/bin/` exists before writing helper scripts there, so the tmpfs setup still works even if you somehow run 03 before 01.
    - Adds an fstab entry: `tmpfs ~/dolt-tmpfs tmpfs size=4G,noatime,nodev,nosuid,uid=<uid>,gid=<gid> 0 0`.
    - Mounts it.
    - Writes two helper scripts: `~/.local/bin/dolt-sync-to-disk` (`rsync -a --delete` tmpfs → persistent) and `~/.local/bin/dolt-restore-from-disk` (the reverse, for post-reboot restore).

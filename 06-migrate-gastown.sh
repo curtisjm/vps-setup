@@ -52,6 +52,41 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+refresh_gt_checkout() {
+    local gt_root="$1"
+    local gt_repo_url="$2"
+
+    log "Cloning $gt_repo_url into $gt_root..."
+
+    if [[ -d "$gt_root/.git" ]]; then
+        warn "$gt_root is already a git repo — skipping clone, pulling latest instead"
+        if ! git -C "$gt_root" pull --recurse-submodules; then
+            error "Failed to update existing checkout at $gt_root"
+            error "Resolve the git error above before restoring data onto this tree."
+            return 1
+        fi
+    elif [[ -d "$gt_root" && "$(ls -A "$gt_root" 2>/dev/null)" ]]; then
+        error "$gt_root exists and is non-empty, but not a git repo. Refusing to clobber."
+        error "Move it aside or delete it, then re-run."
+        return 1
+    else
+        git clone --recurse-submodules "$gt_repo_url" "$gt_root"
+        ok "Clone complete"
+    fi
+}
+# end refresh_gt_checkout
+
+run_gt_doctor_or_fail() {
+    log "Running gt doctor..."
+    if gt doctor; then
+        ok "gt doctor passed"
+    else
+        error "gt doctor failed — review the output above"
+        return 1
+    fi
+}
+# end run_gt_doctor_or_fail
+
 # ----------------------------------------------------------------------------
 # Step 1: Argument parsing + pre-flight
 # ----------------------------------------------------------------------------
@@ -114,19 +149,7 @@ GT_REPO_URL="${GT_REPO_URL:-git@github.com:curtisjm/gt.git}"
 # point to a fork (curtisjm/gascity) or upstream — whatever the laptop had
 # pinned at last push.
 
-log "Cloning $GT_REPO_URL into $GT_ROOT..."
-
-if [[ -d "$GT_ROOT/.git" ]]; then
-    warn "$GT_ROOT is already a git repo — skipping clone, pulling latest instead"
-    git -C "$GT_ROOT" pull --recurse-submodules || warn "Pull failed — resolve manually"
-elif [[ -d "$GT_ROOT" && "$(ls -A "$GT_ROOT" 2>/dev/null)" ]]; then
-    error "$GT_ROOT exists and is non-empty, but not a git repo. Refusing to clobber."
-    error "Move it aside or delete it, then re-run."
-    exit 1
-else
-    git clone --recurse-submodules "$GT_REPO_URL" "$GT_ROOT"
-    ok "Clone complete"
-fi
+refresh_gt_checkout "$GT_ROOT" "$GT_REPO_URL" || exit 1
 
 # Init/update submodules explicitly in case --recurse-submodules was skipped
 # or something is out of sync. Idempotent.
@@ -273,12 +296,7 @@ fi
 # Give Dolt a moment to come up before hammering it with queries
 sleep 3
 
-log "Running gt doctor..."
-if gt doctor; then
-    ok "gt doctor passed"
-else
-    warn "gt doctor reported issues — review the output above"
-fi
+run_gt_doctor_or_fail || exit 1
 
 # Sanity-check the beads data survived by counting a few things.
 log "Sanity-checking bead data..."

@@ -114,8 +114,8 @@ chmod +x 06-migrate-gastown.sh
 #   1. git clone ~/gt (with submodules) from GitHub
 #   2. Verify sha256 against the manifest
 #   3. Extract the Dolt data into the new checkout
-#   4. Build gt+bd from the local source (matches laptop commit exactly)
-#   5. Start the daemon and run `gt doctor`
+#   4. Reuse the already-installed brew gt/bd/gc binaries
+#   5. Start the daemon and require `gt doctor` to pass
 ```
 
 The Claude tarball remains optional on restore. If you omit it,
@@ -123,8 +123,8 @@ The Claude tarball remains optional on restore. If you omit it,
 instead of failing because the manifest also contains `claude-*.tar.gz`.
 
 **Before exporting**, do yourself a favor:
-- `cd ~/gt && git status` — push anything uncommitted; the VPS will git-clone from GitHub
-- Check for unpushed polecat work (the export script scans and warns)
+- `cd ~/gt && git status` — commit and push anything laptop-only; the VPS will git-clone from GitHub
+- Check for local-only submodule and polecat work too; the export script now scans the main repo, submodules, and polecat worktrees and warns before continuing
 - Consider `gt daemon stop` on the laptop after migration so both machines
   aren't racing on the same bead DB if you briefly share a fork
 

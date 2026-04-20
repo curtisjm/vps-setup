@@ -45,6 +45,26 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+ssh_config_has_exact_host() {
+    local config_path="$1"
+    local host="$2"
+
+    [[ -f "$config_path" ]] || return 1
+
+    awk -v host="$host" '
+        $1 == "Host" {
+            for (i = 2; i <= NF; i++) {
+                if ($i == host) {
+                    found = 1
+                    exit
+                }
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$config_path"
+}
+# end ssh_config_has_exact_host
+
 # ----------------------------------------------------------------------------
 # Step 1: Gather git identity
 # ----------------------------------------------------------------------------
@@ -299,10 +319,12 @@ fi
 # Without this, SSH would try the default ~/.ssh/id_ed25519 (which we
 # used for VPS access) and fail.
 SSH_CONFIG="$HOME/.ssh/config"
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
 touch "$SSH_CONFIG"
 chmod 600 "$SSH_CONFIG"
 
-if ! grep -q "Host github.com" "$SSH_CONFIG"; then
+if ! ssh_config_has_exact_host "$SSH_CONFIG" "github.com"; then
     cat >> "$SSH_CONFIG" <<EOF
 
 # GitHub — use dedicated key
