@@ -64,6 +64,44 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
+run_nvm_safely() {
+    local original_term="${TERM-}"
+    local term_overridden=0
+    local errexit_was_enabled=0
+    local nounset_was_enabled=0
+    local status=0
+
+    # nvm uses tput for colored output. If the VPS doesn't know the laptop's
+    # TERM (common with Ghostty/kitty/etc.), temporarily fall back to a basic
+    # terminfo entry so the install doesn't emit distracting warnings.
+    if [[ -n "${TERM-}" ]] && command -v infocmp &>/dev/null && ! infocmp "$TERM" >/dev/null 2>&1; then
+        warn "TERM '$TERM' is unknown on this host — temporarily using xterm-256color for nvm"
+        export TERM="xterm-256color"
+        term_overridden=1
+    fi
+
+    case $- in
+        *e*) errexit_was_enabled=1; set +e ;;
+    esac
+
+    case $- in
+        *u*) nounset_was_enabled=1; set +u ;;
+    esac
+
+    nvm "$@"
+    status=$?
+
+    [[ "$nounset_was_enabled" -eq 1 ]] && set -u
+    [[ "$errexit_was_enabled" -eq 1 ]] && set -e
+
+    if [[ "$term_overridden" -eq 1 ]]; then
+        export TERM="$original_term"
+    fi
+
+    return "$status"
+}
+# end run_nvm_safely
+
 export DEBIAN_FRONTEND=noninteractive
 
 # ----------------------------------------------------------------------------
@@ -182,9 +220,9 @@ export NVM_DIR="$HOME/.nvm"
 # Install latest LTS Node. LTS is the stable, long-supported line —
 # what you want for running tools, not the bleeding-edge "current" line.
 log "Installing Node.js LTS..."
-nvm install --lts
-nvm use --lts
-nvm alias default lts/*
+run_nvm_safely install --lts
+run_nvm_safely use --lts
+run_nvm_safely alias default lts/*
 ok "Node.js $(node --version) installed"
 
 # ----------------------------------------------------------------------------

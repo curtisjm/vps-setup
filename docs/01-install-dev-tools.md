@@ -8,7 +8,7 @@
 1. **Pre-flight.** Refuses to run as root (nvm, pipx, Atuin all install per-user and would end up in `/root` if you ran this as root). Calls `sudo -v` once up front so the script isn't prompting for your password mid-install.
 2. **Build essentials.** `build-essential`, `pkg-config`, `libssl-dev`, `libffi-dev`, `zlib1g-dev`, `libbz2-dev`, `libreadline-dev`, `libsqlite3-dev`, `libncursesw5-dev`, `xz-utils`, `tk-dev`, `libxml2-dev`, `libxmlsec1-dev`, `liblzma-dev`, and `bc`. Without these, anything that compiles native code (most real npm/pip packages) will fail mysteriously. `bc` specifically is pulled in because `04-contabo-diagnostics.sh` uses it both for the CPU stress loop and float comparisons in the verdict block — Ubuntu Server minimal doesn't ship it.
 3. **CLI productivity tools.** `tmux`, `ripgrep`, `fd-find`, `fzf`, `jq`, `bat`, `tree`, `ncdu`, `tldr`, `mtr-tiny`, `mosh`, `restic`, `direnv`, `make`, `pv`, `unzip`, `zip`, `vim`, `nano`, `less`. On Ubuntu, `bat` installs as `batcat` and `fd` as `fdfind` (to avoid name collisions with other packages); the script symlinks them to `~/.local/bin/{bat,fd}` so they work under the expected names.
-4. **Node via nvm.** Installs nvm v0.40.1 via the official installer, sources it into the current shell, then `nvm install --lts && nvm use --lts && nvm alias default lts/*`. Deliberately avoids `apt install nodejs` because Ubuntu's Node is usually 1–2 years stale, and nvm lets you switch versions per-project for AI tools that need specific Node versions.
+4. **Node via nvm.** Installs nvm v0.40.1 via the official installer, sources it into the current shell, then runs the LTS install/use/alias steps through a small wrapper that temporarily relaxes `set -u` for nvm and falls back to `TERM=xterm-256color` if the VPS doesn't know your local terminal type. That matters because the top-level script runs with `set -euo pipefail`, while nvm's shell code is not fully nounset-safe. Deliberately avoids `apt install nodejs` because Ubuntu's Node is usually 1–2 years stale, and nvm lets you switch versions per-project for AI tools that need specific Node versions.
 5. **Python tooling.** `python3`, `python3-pip`, `python3-venv`, `python3-dev`, `pipx`. Calls `pipx ensurepath` to add its bin dir to `PATH`.
 6. **uv.** Installs via `curl ... | sh` from `astral.sh/uv`. uv is the de facto Python package manager for modern AI tooling; having it installed costs nothing even if you don't use it directly.
 7. **Go toolchain.** Downloads Go 1.24.12 (pinned in the script) from `go.dev/dl/`, removes any old `/usr/local/go`, extracts the tarball into `/usr/local`. Arch-aware: uses `dpkg --print-architecture` to fetch `amd64` or `arm64`. `apt` is explicitly avoided because Ubuntu 22.04 ships Go 1.18 and 24.04 ships something older than what gastown requires (1.24+). `PATH` is exported for the rest of this script; the bashrc block in step 15 makes it permanent.
@@ -44,7 +44,12 @@ ln -sf /usr/bin/fdfind ~/.local/bin/fd
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
-nvm install --lts && nvm alias default lts/*
+set +u
+[[ -n "${TERM-}" ]] && infocmp "$TERM" >/dev/null 2>&1 || export TERM=xterm-256color
+nvm install --lts
+nvm use --lts
+nvm alias default lts/*
+set -u
 
 # --- Python ---
 sudo apt-get install -y python3 python3-pip python3-venv python3-dev pipx
@@ -148,6 +153,7 @@ sudo apt-get update && sudo apt-get upgrade           # system packages (also au
 
 - **Docker requires re-login** before `docker` works without `sudo`. The script warns about this but doesn't force it — you can just log out and back in after the script finishes.
 - **`source ~/.bashrc`** is required at the end for the new PATH and aliases to take effect in your current shell. Don't skip this and then wonder why `gt` isn't found.
+- **nvm is not `set -u`-clean.** That's why the script now wraps the `nvm install/use/alias` calls instead of invoking them bare under `set -euo pipefail`.
 - **Linuxbrew prefix is a directory, not your home.** `/home/linuxbrew/.linuxbrew` is created by the installer (owned by the `linuxbrew` user it also creates). Don't try to `rm -rf` it without also removing the user/group. If you ever want to uninstall, follow the official Homebrew uninstall script.
 - **`brew install gastown` conflicts with `genometools` and `libslax`** (they all ship a binary called `gt`). On a bare VPS this doesn't matter; if you later install either of those by accident, you'll get a PATH collision.
 - **npm global packages live in the current Node version's prefix.** Switching Node via `nvm use <other>` hides globally-installed Claude Code / Codex. Either stick to LTS or `npm install -g` again after a version swap.
