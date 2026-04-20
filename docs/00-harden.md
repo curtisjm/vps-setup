@@ -27,7 +27,7 @@ The script is a top-to-bottom walk through "bare minimum hardening for a persona
 9. **Stop-and-verify gate (pubkey path).** Prints a big warning and asks the user to confirm (in a second terminal) that they can SSH in as the new user with their key, *before* the script disables root login and changes sshd. On reruns, this uses the SSH port currently configured on the host rather than blindly assuming port 22. Skipping this is how people lock themselves out.
 10. **Hardens sshd.** Backs up `/etc/ssh/sshd_config` with a timestamp, then writes its policy into `/etc/ssh/sshd_config.d/00-vps-setup-hardening.conf`. Settings applied: custom `Port`, `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication yes`, `UsePAM yes`, `PubkeyAuthentication yes`, `PermitEmptyPasswords no`, `X11Forwarding no`, `MaxAuthTries 3`, `ClientAliveInterval 300` / `ClientAliveCountMax 2`, `AllowUsers <new-user>`, `AuthenticationMethods "publickey keyboard-interactive:pam"`.
 11. **Step 8b: configures PAM for TOTP.** Edits `/etc/pam.d/sshd` to append `auth required pam_google_authenticator.so` immediately after the existing `@include common-auth` line. Order matters: common-auth runs first (password check) then the TOTP module (code check). A marker comment makes the edit idempotent — reruns detect it and skip. The original `/etc/pam.d/sshd` is backed up with a timestamp before modification. No `nullok` flag, on purpose: if the user never enrolled TOTP, their keyboard-interactive path refuses login rather than quietly falling back to password-only.
-12. **Validates sshd, pre-opens the new firewall port if needed, then restarts.** `sshd -t` before touching the live service. If UFW is already active and the SSH port is changing on a rerun, the script first allows the *new* port and deliberately leaves the *old* port open until the new one is verified. It also detects whether this host exposes OpenSSH as `ssh.service` or `sshd.service` and restarts the one that actually exists. If validation fails we abort without restarting, so the existing session keeps working while you fix it.
+12. **Validates sshd, pre-opens the new firewall port if needed, then restarts.** `sshd -t` before touching the live service. If UFW is already active and the SSH port is changing on a rerun, the script first allows the *new* port and deliberately leaves the *old* port open until the new one is verified. If the host is using systemd socket activation (`ssh.socket`) and the SSH port is changing, the script switches SSH over to the normal `ssh.service`/`sshd.service` path immediately before the restart so the configured `Port` value actually becomes the live listener. If validation fails we abort without restarting, so the existing session keeps working while you fix it.
 13. **Post-restart key-login verify gate.** After sshd restarts, the script pauses again and requires you to verify a fresh key-based login on the configured port from a second terminal before it continues. If that check fails, the script stops and leaves any previously-open SSH firewall rule in place.
 14. **Step 8c: second verify gate (password+TOTP path).** Optional but strongly encouraged. Prints an `ssh` command with `PreferredAuthentications=keyboard-interactive` and `PubkeyAuthentication=no` that forces the password+TOTP path. The prompt now explicitly warns that three bad attempts within 30 seconds will temporarily rate-limit that path, but that this does **not** disable normal key-based SSH. If the user confirms it worked, great; if they skip, the pubkey path still works and they can debug TOTP later. Non-fatal.
 15. **Configures UFW.** Sets `default deny incoming` / `default allow outgoing`, opens the chosen SSH port with a comment, then `ufw --force enable`. Deliberately additive — no `ufw --force reset` — so any rules you add later survive a rerun of 00. If the script had to keep an old SSH port open during a port migration, it prompts you after the firewall step to remove that old rule only after you've confirmed the new port works.
@@ -106,8 +106,13 @@ cp /etc/pam.d/sshd /etc/pam.d/sshd.backup.$(date +%Y%m%d-%H%M%S)
 # No 'nullok' — users without ~/.google_authenticator can't use password path.
 sed -i '/^@include common-auth/a auth required pam_google_authenticator.so' /etc/pam.d/sshd
 
-CURRENT_SSH_PORT="$(awk '$1 == "Port" { print $2; exit }' /etc/ssh/sshd_config.d/00-vps-setup-hardening.conf 2>/dev/null || true)"
-CURRENT_SSH_PORT="${CURRENT_SSH_PORT:-22}"
+if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    CURRENT_SSH_PORT="$(systemctl cat ssh.socket | awk -F= '/^ListenStream=/ { print $2; exit }')"
+    CURRENT_SSH_PORT="${CURRENT_SSH_PORT##*:}"
+else
+    CURRENT_SSH_PORT="$(awk '$1 == "Port" { print $2; exit }' /etc/ssh/sshd_config.d/00-vps-setup-hardening.conf 2>/dev/null || true)"
+    CURRENT_SSH_PORT="${CURRENT_SSH_PORT:-22}"
+fi
 
 if ufw status 2>/dev/null | grep -q '^Status: active$' && [[ "$CURRENT_SSH_PORT" != "$SSH_PORT" ]]; then
     ufw allow "$SSH_PORT"/tcp comment 'SSH'
@@ -115,6 +120,14 @@ if ufw status 2>/dev/null | grep -q '^Status: active$' && [[ "$CURRENT_SSH_PORT"
 fi
 
 sshd -t
+if systemctl is-active --quiet ssh.socket 2>/dev/null && [[ "$CURRENT_SSH_PORT" != "$SSH_PORT" ]]; then
+    systemctl disable --now ssh.socket
+    if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'ssh.service'; then
+        systemctl enable --now ssh
+    else
+        systemctl enable --now sshd
+    fi
+fi
 if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'ssh.service'; then
     systemctl restart ssh
 elif systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'sshd.service'; then
@@ -221,7 +234,7 @@ timedatectl set-timezone America/Los_Angeles
 - **Re-enrolling TOTP.** The script skips enrollment on rerun if `~/.google_authenticator` exists — re-enrollment generates a new secret and invalidates the old app. If you actually want to re-enroll: `rm ~/.google_authenticator` first, then rerun the script (or manually run the `google-authenticator` command from the replicate-manually section).
 - **Three bad password/TOTP attempts trigger a temporary rate limit.** `google-authenticator --rate-limit=3 --rate-time=30` means the forced keyboard-interactive test can stop accepting attempts for about 30 seconds after three mistakes. That is annoying, but it does **not** disable normal key-based SSH.
 - **The `AllowUsers` line.** If you already have other SSH-based user accounts on the VPS, `AllowUsers <new-user>` will restrict logins to only the new user. Add them (space-separated) in `/etc/ssh/sshd_config` if you need others to keep access. They'll also need their own TOTP enrollment if they use the password path.
-- **`ssh.socket` is a special case.** If systemd socket activation is running SSH through `ssh.socket`, changing `Port` in `sshd_config` may not move the actual listener. The script now refuses to do an automatic port change in that mode; switch away from socket activation first or keep the existing port.
+- **`ssh.socket` is a special case.** If systemd socket activation is running SSH through `ssh.socket`, changing `Port` in `sshd_config` by itself may not move the actual listener. The script now handles that by converting to `ssh.service`/`sshd.service` automatically, but only when you're actually changing ports. If you keep the same port, it leaves `ssh.socket` alone.
 - The script hard-codes `America/Los_Angeles`. If you're not in the Pacific timezone, edit the `timedatectl` line or change it after the fact with `sudo timedatectl set-timezone <Region/City>`.
 - The fail2ban `ignoreip` line is commented out. If your home IP is static, uncomment it and add your IP so a typo can't lock you out.
 - **If you lock yourself out:** Contabo's control panel has a web VNC console. Fix `/etc/ssh/sshd_config` and/or `/etc/pam.d/sshd` there. The timestamped backups from steps 10 and 11 are your restore paths.

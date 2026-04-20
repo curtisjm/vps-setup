@@ -61,7 +61,10 @@ password+TOTP path.
 
 If you rerun `00-harden.sh` later and change the SSH port while UFW is already
 active, the script pre-opens the new port and keeps the old firewall rule in
-place until you've confirmed the new port works.
+place until you've confirmed the new port works. On hosts that use systemd
+socket activation (`ssh.socket`), it now converts SSH to the normal
+`ssh.service`/`sshd.service` path only for that port-change case, so the new
+`Port` setting actually takes effect.
 
 After hardening completes, log in as your new user:
 

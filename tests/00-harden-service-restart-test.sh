@@ -5,10 +5,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_PATH="$ROOT_DIR/00-harden.sh"
 
 extract_helper() {
-    awk '
-        /^restart_ssh_service\(\) \{/ { capture = 1 }
+    local name="$1"
+
+    awk -v name="$name" '
+        $0 ~ ("^" name "\\(\\) \\{") { capture = 1 }
         capture { print }
-        /^# end restart_ssh_service$/ { capture = 0 }
+        $0 ~ ("^# end " name "$") { capture = 0 }
     ' "$SCRIPT_PATH" | sed '$d'
 }
 
@@ -46,7 +48,9 @@ EOF
     export MOCK_LOG="$tmpdir/log"
     : > "$MOCK_LOG"
 
-    helper="$(extract_helper)"
+    helper="$(extract_helper get_ssh_service_name)"
+    helper+=$'\n'
+    helper+="$(extract_helper restart_ssh_service)"
     error() { printf 'ERROR: %s\n' "$*" >&2; }
     eval "$helper"
     restart_ssh_service

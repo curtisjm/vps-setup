@@ -70,28 +70,28 @@ ok()    { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[✗]${NC} $1"; }
 
-restart_ssh_service() {
+get_ssh_service_name() {
     # Debian/Ubuntu commonly expose OpenSSH as ssh.service, while other
     # distros often use sshd.service. Detect what's actually present instead
     # of hard-coding one unit name and aborting mid-hardening.
     if command -v systemctl &>/dev/null; then
         if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'ssh.service'; then
-            systemctl restart ssh
+            echo "ssh"
             return 0
         fi
         if systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'sshd.service'; then
-            systemctl restart sshd
+            echo "sshd"
             return 0
         fi
     fi
 
     if command -v service &>/dev/null; then
         if service ssh status >/dev/null 2>&1; then
-            service ssh restart
+            echo "ssh"
             return 0
         fi
         if service sshd status >/dev/null 2>&1; then
-            service sshd restart
+            echo "sshd"
             return 0
         fi
     fi
@@ -99,11 +99,63 @@ restart_ssh_service() {
     error "Could not determine the SSH service name (tried ssh and sshd)."
     return 1
 }
+# end get_ssh_service_name
+
+restart_ssh_service() {
+    local ssh_service_name=""
+
+    ssh_service_name="$(get_ssh_service_name)" || return 1
+
+    if command -v systemctl &>/dev/null; then
+        systemctl restart "$ssh_service_name"
+        return 0
+    fi
+
+    if command -v service &>/dev/null; then
+        service "$ssh_service_name" restart
+        return 0
+    fi
+
+    error "Could not restart the SSH service."
+    return 1
+}
 # end restart_ssh_service
+
+get_ssh_socket_port() {
+    local listen_stream=""
+
+    if ! ssh_socket_is_active || ! command -v systemctl &>/dev/null; then
+        return 1
+    fi
+
+    listen_stream="$(systemctl cat ssh.socket 2>/dev/null | awk -F= '/^ListenStream=/ { print $2; exit }')"
+    if [[ -z "$listen_stream" ]]; then
+        return 1
+    fi
+
+    if [[ "$listen_stream" == *']:'* ]]; then
+        listen_stream="${listen_stream##*]:}"
+    elif [[ "$listen_stream" == *:* ]]; then
+        listen_stream="${listen_stream##*:}"
+    fi
+
+    if [[ "$listen_stream" =~ ^[0-9]+$ ]]; then
+        echo "$listen_stream"
+        return 0
+    fi
+
+    return 1
+}
+# end get_ssh_socket_port
 
 get_current_ssh_port() {
     local managed_dropin="/etc/ssh/sshd_config.d/00-vps-setup-hardening.conf"
     local port=""
+
+    if port="$(get_ssh_socket_port)"; then
+        echo "$port"
+        return 0
+    fi
 
     if [[ -f "$managed_dropin" ]]; then
         port="$(awk '$1 == "Port" { print $2; exit }' "$managed_dropin")"
@@ -178,6 +230,42 @@ ssh_socket_is_active() {
     command -v systemctl &>/dev/null && systemctl is-active --quiet ssh.socket
 }
 # end ssh_socket_is_active
+
+prepare_ssh_activation_for_port_change() {
+    local current_port="$1"
+    local desired_port="$2"
+    local ssh_service_name=""
+
+    if [[ "$current_port" == "$desired_port" ]] || ! ssh_socket_is_active; then
+        return 0
+    fi
+
+    ssh_service_name="$(get_ssh_service_name)" || return 1
+
+    log "ssh.socket is active. Switching to ${ssh_service_name}.service before moving SSH to port ${desired_port}."
+
+    if ! systemctl disable --now ssh.socket; then
+        error "Failed to disable ssh.socket before changing the SSH port."
+        return 1
+    fi
+
+    if ! systemctl enable --now "$ssh_service_name"; then
+        error "Failed to enable ${ssh_service_name}.service after disabling ssh.socket."
+        error "Re-enabling ssh.socket to preserve the existing listener."
+        systemctl enable --now ssh.socket >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    if ! systemctl is-active --quiet "$ssh_service_name"; then
+        error "${ssh_service_name}.service is not active after switching away from ssh.socket."
+        error "Re-enabling ssh.socket to preserve the existing listener."
+        systemctl enable --now ssh.socket >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    ok "Switched SSH from socket activation to ${ssh_service_name}.service"
+}
+# end prepare_ssh_activation_for_port_change
 
 # ----------------------------------------------------------------------------
 # Step 1: Gather user input upfront
@@ -520,13 +608,6 @@ SSH_CONFIG="/etc/ssh/sshd_config"
 SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSH_DROPIN="$SSH_DROPIN_DIR/00-vps-setup-hardening.conf"
 
-if [[ "$PORT_CHANGE_REQUESTED" -eq 1 ]] && ssh_socket_is_active; then
-    error "This host is using ssh.socket for SSH activation."
-    error "Automatic SSH port changes are not safe in that mode because the listener may ignore sshd_config's Port."
-    error "Keep the current SSH port, or disable ssh.socket manually before rerunning."
-    exit 1
-fi
-
 # On modern Ubuntu/Debian images, sshd_config often includes
 # /etc/ssh/sshd_config.d/* near the top and OpenSSH keeps the FIRST value it
 # sees for single-value options. That means appending settings to the end of
@@ -597,6 +678,10 @@ fi
 if [[ "$PORT_CHANGE_REQUESTED" -eq 1 && "$UFW_WAS_ACTIVE" -eq 1 ]]; then
     prepare_ufw_for_ssh_port_change "$CURRENT_SSH_PORT" "$SSH_PORT"
     KEEP_OLD_SSH_UFW_RULE=1
+fi
+
+if [[ "$PORT_CHANGE_REQUESTED" -eq 1 ]]; then
+    prepare_ssh_activation_for_port_change "$CURRENT_SSH_PORT" "$SSH_PORT" || exit 1
 fi
 
 restart_ssh_service || exit 1
