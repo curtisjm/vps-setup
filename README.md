@@ -54,8 +54,14 @@ packages, where distro drop-ins are included early and first-set values win.
 
 **Before it locks down SSH**, the script pauses and asks you to verify in a
 separate terminal that you can log in as the new user with your key.
-Don't skip that check. It also offers an optional second verification for
-the password+TOTP path after sshd is reconfigured.
+Don't skip that check. After sshd is reconfigured, it now stops again and
+requires you to verify a fresh key-based login on the configured port before
+continuing. It also offers an optional second verification for the
+password+TOTP path.
+
+If you rerun `00-harden.sh` later and change the SSH port while UFW is already
+active, the script pre-opens the new port and keeps the old firewall rule in
+place until you've confirmed the new port works.
 
 After hardening completes, log in as your new user:
 

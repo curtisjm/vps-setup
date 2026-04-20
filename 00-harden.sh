@@ -101,6 +101,84 @@ restart_ssh_service() {
 }
 # end restart_ssh_service
 
+get_current_ssh_port() {
+    local managed_dropin="/etc/ssh/sshd_config.d/00-vps-setup-hardening.conf"
+    local port=""
+
+    if [[ -f "$managed_dropin" ]]; then
+        port="$(awk '$1 == "Port" { print $2; exit }' "$managed_dropin")"
+        if [[ -n "$port" ]]; then
+            echo "$port"
+            return 0
+        fi
+    fi
+
+    if command -v sshd &>/dev/null; then
+        port="$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+        if [[ -n "$port" ]]; then
+            echo "$port"
+            return 0
+        fi
+    fi
+
+    echo "22"
+}
+# end get_current_ssh_port
+
+build_ssh_login_command() {
+    local user="$1"
+    local host="$2"
+    local port="$3"
+
+    if [[ "$port" == "22" ]]; then
+        echo "ssh ${user}@${host}"
+    else
+        echo "ssh -p ${port} ${user}@${host}"
+    fi
+}
+# end build_ssh_login_command
+
+ufw_is_active() {
+    command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q '^Status: active$'
+}
+# end ufw_is_active
+
+prepare_ufw_for_ssh_port_change() {
+    local current_port="$1"
+    local desired_port="$2"
+
+    if [[ "$current_port" == "$desired_port" ]] || ! ufw_is_active; then
+        return 0
+    fi
+
+    log "UFW is already active. Allowing new SSH port ${desired_port}/tcp before reloading SSH."
+    log "Keeping ${current_port}/tcp open until you confirm the new port works."
+    ufw allow "${desired_port}/tcp" comment 'SSH'
+}
+# end prepare_ufw_for_ssh_port_change
+
+remove_old_ufw_rule_for_ssh_port_change() {
+    local old_port="$1"
+    local current_port="$2"
+
+    if [[ "$old_port" == "$current_port" ]] || ! ufw_is_active; then
+        return 0
+    fi
+
+    if ufw --force delete allow "${old_port}/tcp" >/dev/null 2>&1; then
+        ok "Removed old UFW rule for ${old_port}/tcp"
+    else
+        warn "Could not remove old UFW rule for ${old_port}/tcp automatically"
+        warn "Delete it manually later with: ufw delete allow ${old_port}/tcp"
+    fi
+}
+# end remove_old_ufw_rule_for_ssh_port_change
+
+ssh_socket_is_active() {
+    command -v systemctl &>/dev/null && systemctl is-active --quiet ssh.socket
+}
+# end ssh_socket_is_active
+
 # ----------------------------------------------------------------------------
 # Step 1: Gather user input upfront
 # ----------------------------------------------------------------------------
@@ -201,6 +279,21 @@ apt-get install -y -qq \
     libpam-google-authenticator \
     qrencode
 ok "Packages installed"
+
+CURRENT_SSH_PORT="$(get_current_ssh_port)"
+SSH_HOST_IP="$(hostname -I | awk '{print $1}')"
+PORT_CHANGE_REQUESTED=0
+KEEP_OLD_SSH_UFW_RULE=0
+
+if [[ "$CURRENT_SSH_PORT" != "$SSH_PORT" ]]; then
+    PORT_CHANGE_REQUESTED=1
+fi
+
+if ufw_is_active; then
+    UFW_WAS_ACTIVE=1
+else
+    UFW_WAS_ACTIVE=0
+fi
 
 # ----------------------------------------------------------------------------
 # Step 4: Create non-root user
@@ -382,7 +475,7 @@ warn "==========================================================================
 warn "CRITICAL: Before continuing, open a NEW terminal window and verify you"
 warn "can SSH in as the new user:"
 warn ""
-warn "    ssh $NEW_USER@$(hostname -I | awk '{print $1}')"
+warn "    $(build_ssh_login_command "$NEW_USER" "$SSH_HOST_IP" "$CURRENT_SSH_PORT")"
 warn ""
 warn "Once you confirm the new user can log in with their SSH key,"
 warn "come back here and continue. If you can't log in, DO NOT continue —"
@@ -426,6 +519,13 @@ log "Hardening SSH configuration..."
 SSH_CONFIG="/etc/ssh/sshd_config"
 SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
 SSH_DROPIN="$SSH_DROPIN_DIR/00-vps-setup-hardening.conf"
+
+if [[ "$PORT_CHANGE_REQUESTED" -eq 1 ]] && ssh_socket_is_active; then
+    error "This host is using ssh.socket for SSH activation."
+    error "Automatic SSH port changes are not safe in that mode because the listener may ignore sshd_config's Port."
+    error "Keep the current SSH port, or disable ssh.socket manually before rerunning."
+    exit 1
+fi
 
 # On modern Ubuntu/Debian images, sshd_config often includes
 # /etc/ssh/sshd_config.d/* near the top and OpenSSH keeps the FIRST value it
@@ -494,8 +594,30 @@ if ! sshd -t; then
     exit 1
 fi
 
+if [[ "$PORT_CHANGE_REQUESTED" -eq 1 && "$UFW_WAS_ACTIVE" -eq 1 ]]; then
+    prepare_ufw_for_ssh_port_change "$CURRENT_SSH_PORT" "$SSH_PORT"
+    KEEP_OLD_SSH_UFW_RULE=1
+fi
+
 restart_ssh_service || exit 1
 ok "SSH hardened (port $SSH_PORT, root disabled, pubkey-or-password+TOTP)"
+
+echo ""
+warn "=========================================================================="
+warn "CRITICAL: Before continuing, verify key-based SSH works on the configured port:"
+warn ""
+warn "    $(build_ssh_login_command "$NEW_USER" "$SSH_HOST_IP" "$SSH_PORT")"
+warn ""
+warn "Do this from a NEW terminal window and keep this current session open."
+warn "If it does NOT work, answer 'n' below and recover before touching firewall cleanup."
+warn "=========================================================================="
+echo ""
+read -rp "Have you verified SSH key login as $NEW_USER works on port $SSH_PORT? [y/N] " POST_RESTART_VERIFIED
+if [[ "$POST_RESTART_VERIFIED" != "y" && "$POST_RESTART_VERIFIED" != "Y" ]]; then
+    error "Aborting before continuing. Keep this session open and recover SSH access first."
+    error "If UFW was already active, the old SSH firewall rule has been left in place."
+    exit 1
+fi
 
 # ----------------------------------------------------------------------------
 # Step 8c: Second verification gate — password+TOTP path
@@ -520,6 +642,10 @@ warn "        -o PubkeyAuthentication=no \\"
 warn "        -p $SSH_PORT $NEW_USER@$(hostname -I | awk '{print $1}')"
 warn ""
 warn "You should be prompted for: (1) your UNIX password, (2) a 6-digit TOTP code."
+warn ""
+warn "Important: this test forces the password+TOTP path only."
+warn "Three bad attempts within 30 seconds will temporarily rate-limit that path."
+warn "That does NOT disable normal SSH key login on the standard path."
 warn ""
 warn "If this fails, your pubkey path still works — but you'll want to fix TOTP"
 warn "before you need it from a keyless device. Common causes:"
@@ -558,6 +684,17 @@ ufw allow "$SSH_PORT/tcp" comment 'SSH'
 # with this being called on an already-enabled firewall.
 ufw --force enable
 ok "Firewall enabled (port $SSH_PORT open for SSH; existing rules preserved)"
+
+if [[ "$KEEP_OLD_SSH_UFW_RULE" -eq 1 ]]; then
+    echo ""
+    read -rp "SSH on port $SSH_PORT works. Remove the old UFW rule for port $CURRENT_SSH_PORT now? [y/N] " REMOVE_OLD_UFW_RULE
+    if [[ "$REMOVE_OLD_UFW_RULE" == "y" || "$REMOVE_OLD_UFW_RULE" == "Y" ]]; then
+        remove_old_ufw_rule_for_ssh_port_change "$CURRENT_SSH_PORT" "$SSH_PORT"
+    else
+        warn "Keeping old SSH firewall rule for $CURRENT_SSH_PORT/tcp in place for now."
+        warn "Delete it later with: ufw --force delete allow ${CURRENT_SSH_PORT}/tcp"
+    fi
+fi
 
 # ----------------------------------------------------------------------------
 # Step 10: Configure fail2ban
