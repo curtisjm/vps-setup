@@ -15,7 +15,6 @@ Designed initially for a Contabo VPS 40 (12 vCPU / 48GB RAM / 250GB NVMe) in US 
 | `04-contabo-diagnostics.sh` | Benchmark the VPS to check for noisy neighbors | regular user | VPS | [docs/04-contabo-diagnostics.md](docs/04-contabo-diagnostics.md) |
 | `05-export-from-laptop.sh` | Snapshot Dolt data + ~/.claude into tarballs | regular user | **laptop** | [docs/05-export-from-laptop.md](docs/05-export-from-laptop.md) |
 | `06-migrate-gastown.sh` | Clone ~/gt, restore tarballs, start daemon | regular user | VPS | [docs/06-migrate-gastown.md](docs/06-migrate-gastown.md) |
-| `07-install-tailscale.sh` | Join VPS to tailnet, optionally lock SSH to Tailscale-only | regular user | VPS | [docs/07-install-tailscale.md](docs/07-install-tailscale.md) |
 
 Each per-script doc has: what the script does in detail, how to replicate by hand, why it's built that way, and known gotchas. See [docs/README.md](docs/README.md) for the index.
 
@@ -61,7 +60,6 @@ source ~/.bashrc              # pick up new PATH and aliases
 ./02-setup-git.sh             # interactive — will pause for you to add key to GitHub
 ./03-install-dolt.sh          # optional tmpfs setup for Contabo speed workaround
 ./04-contabo-diagnostics.sh   # run now to establish baseline; re-run periodically
-./07-install-tailscale.sh     # join the VPS to your tailnet (recommended)
 ```
 
 ## Gas Town migration (laptop → VPS)
@@ -174,10 +172,9 @@ apps, graphics protocols). Fine for pure-text SSH sessions.
 
 **Idempotent.** Every script should be safe to re-run. If something is already set up, the script detects that and skips it rather than clobbering working config. Specifically:
 
-- `00-harden.sh` appends SSH keys to `authorized_keys` instead of overwriting; `ufw` rules are additive (no `--force reset`) so rules added later by `07-install-tailscale.sh` survive a rerun.
+- `00-harden.sh` appends SSH keys to `authorized_keys` instead of overwriting; `ufw` rules are additive (no `--force reset`) so any rules you add later survive a rerun.
 - `02-setup-git.sh` manages a BEGIN/END block in `~/.gitignore_global`; edits you make outside those markers are preserved across reruns. It also refuses to overwrite an existing `Host github.com` SSH config block that points to a different key.
 - `03-install-dolt.sh` unsets before `--add`-ing dolt config so user.name/email don't grow duplicate entries on rerun.
-- `07-install-tailscale.sh` applies the current `--ssh` preference even when Tailscale is already logged in (so toggling the prompt answer between runs takes effect).
 
 This matters because you'll absolutely need to re-run parts of these as you iterate.
 

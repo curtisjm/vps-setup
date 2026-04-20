@@ -18,10 +18,9 @@ Deep-dive docs for each script in this repo. Each page covers:
 | `04-contabo-diagnostics.sh` | [04-contabo-diagnostics.md](04-contabo-diagnostics.md) | CPU steal, 4k random IOPS, memory, network — noisy-neighbor check |
 | `05-export-from-laptop.sh` | [05-export-from-laptop.md](05-export-from-laptop.md) | Tarball `~/gt/.dolt-data` + `~/.claude` with sha256 manifest |
 | `06-migrate-gastown.sh` | [06-migrate-gastown.md](06-migrate-gastown.md) | Clone `~/gt`, verify + extract tarballs, build gt/bd from source, start daemon |
-| `07-install-tailscale.sh` | [07-install-tailscale.md](07-install-tailscale.md) | Join VPS to tailnet as server, optionally lock SSH to tailnet-only |
 
 ## Recommended reading order
 
-- **Fresh install:** 00 → 01 → 02 → 03 → 07 → (laptop: 05) → (VPS: 06). Run 04 periodically to spot-check Contabo.
+- **Fresh install:** 00 → 01 → 02 → 03 → (laptop: 05) → (VPS: 06). Run 04 periodically to spot-check Contabo.
 - **Understanding a specific piece:** jump straight to that script's doc — they're self-contained.
 - **Doing it all by hand:** each doc's "Replicate manually" section gives you the commands in order.

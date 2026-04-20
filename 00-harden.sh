@@ -363,8 +363,7 @@ ok "SSH hardened (port $SSH_PORT, root disabled, password auth disabled)"
 
 log "Configuring UFW firewall..."
 # Additive, not destructive. 'ufw --force reset' wipes ALL rules — including
-# ones added by later scripts (e.g., 07-install-tailscale.sh narrows SSH to
-# the Tailscale CGNAT range). Re-running 00 would silently undo that lockdown.
+# any you've added manually later. Re-running 00 would silently undo that.
 #
 # Instead: set defaults (idempotent), allow our SSH port (idempotent — ufw
 # deduplicates), and enable. Existing rules are preserved.
