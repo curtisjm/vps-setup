@@ -102,6 +102,43 @@ run_nvm_safely() {
 }
 # end run_nvm_safely
 
+install_gascity_with_brew_conflict_workaround() {
+    local relink_flock=0
+    local errexit_was_enabled=0
+    local install_status=0
+
+    # Homebrew's gascity formula pulls util-linux, which also ships `flock`.
+    # If the standalone brew `flock` formula is already linked, Homebrew
+    # refuses the install until `flock` is temporarily unlinked.
+    if brew list --formula flock >/dev/null 2>&1; then
+        if brew unlink flock >/dev/null 2>&1; then
+            relink_flock=1
+            warn "Temporarily unlinked brew 'flock' so gascity can install util-linux"
+        fi
+    fi
+
+    case $- in
+        *e*) errexit_was_enabled=1; set +e ;;
+    esac
+
+    brew install gastownhall/gascity/gascity
+    install_status=$?
+
+    [[ "$errexit_was_enabled" -eq 1 ]] && set -e
+
+    if [[ "$relink_flock" -eq 1 ]]; then
+        if brew link flock >/dev/null 2>&1; then
+            ok "Re-linked brew 'flock' after gascity install"
+        else
+            warn "Couldn't re-link brew 'flock' automatically"
+            warn "Run 'brew link flock' manually if you still want the brew version first on PATH"
+        fi
+    fi
+
+    return "$install_status"
+}
+# end install_gascity_with_brew_conflict_workaround
+
 export DEBIAN_FRONTEND=noninteractive
 
 # ----------------------------------------------------------------------------
@@ -510,7 +547,7 @@ fi
 if command -v gc &> /dev/null && [[ "$(command -v gc)" == "$BREW_PREFIX"* ]]; then
     warn "gc already installed from brew ($(gc version 2>/dev/null | head -1)), skipping"
 else
-    brew install gastownhall/gascity/gascity
+    install_gascity_with_brew_conflict_workaround
     ok "gc installed: $(gc version 2>/dev/null | head -1 || echo 'unknown')"
 fi
 

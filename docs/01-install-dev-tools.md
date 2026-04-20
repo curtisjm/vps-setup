@@ -18,7 +18,7 @@
 11. **OpenAI Codex CLI.** `npm install -g @openai/codex`. First-run auth is `codex login`.
 12. **Atuin.** Shell history replacement with fuzzy search, per-directory context, and optional E2E-encrypted sync. Installs via the official installer from `setup.atuin.sh`, which drops a binary at `~/.atuin/bin/atuin`. Sync is opt-in — the default is local-only, which is saner on a VPS.
 13. **Linuxbrew.** Runs the official installer (`NONINTERACTIVE=1 CI=1` to skip prompts) which lays brew down at `/home/linuxbrew/.linuxbrew`. Sources `brew shellenv` into the current script so the next step can call `brew`. The bashrc block in step 15 wires brew shellenv into future shells.
-14. **Gas Town binaries via brew.** `brew install gastown`, `brew install beads`, `brew install gastownhall/gascity/gascity`. These match Curtis's laptop install (both run from `/opt/homebrew/bin` on macOS / `/home/linuxbrew/.linuxbrew/bin` on Linux). Updates flow through `brew upgrade`. The `~/gt/gastown/mayor/rig` and `~/gt/gascity/mayor/rig` checkouts (cloned later by `06-migrate-gastown.sh`) are DEV workspaces, not the install source. Wasteland (`wl`) is skipped — optional, and the upstream fork situation varies.
+14. **Gas Town binaries via brew.** `brew install gastown`, `brew install beads`, `brew install gastownhall/gascity/gascity`. These match Curtis's laptop install (both run from `/opt/homebrew/bin` on macOS / `/home/linuxbrew/.linuxbrew/bin` on Linux). Updates flow through `brew upgrade`. The `gascity` install now carries a narrow Homebrew workaround: if the standalone brew `flock` formula is installed, the script temporarily unlinks it so `util-linux` can install its own `flock`, then re-links `flock` afterward. The `~/gt/gastown/mayor/rig` and `~/gt/gascity/mayor/rig` checkouts (cloned later by `06-migrate-gastown.sh`) are DEV workspaces, not the install source. Wasteland (`wl`) is skipped — optional, and the upstream fork situation varies.
 15. **Shell customizations.** Appends a marker-gated block to `~/.bashrc` with: HISTSIZE/HISTFILESIZE, shared history across tmux panes, PATH additions for `~/.local/bin`, `~/.cargo/bin`, `/usr/local/go/bin`, `~/go/bin`, `~/.atuin/bin`, `brew shellenv` for Linuxbrew (so `gt`/`bd`/`gc` resolve from `/home/linuxbrew/.linuxbrew/bin` in every shell), `direnv hook bash`, `atuin init bash --disable-up-arrow`, a small set of aliases (`ll`, `la`, `..`, `grep --color`, `df -h`, etc.), and two diagnostic aliases: `steal` (watches vmstat's `st` column, the Contabo noisy-neighbor metric) and `bigfiles` (top 20 disk-users in CWD).
 16. **tmux config.** Writes a minimal `~/.tmux.conf` if one doesn't exist: Ctrl-a prefix (easier than Ctrl-b), mouse on, 50k history, `|` and `-` for splits, pane numbering from 1.
 
@@ -103,7 +103,9 @@ eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 # --- Gas Town binaries via brew ---
 brew install gastown
 brew install beads
+brew unlink flock 2>/dev/null || true   # only needed if you have the standalone brew flock formula
 brew install gastownhall/gascity/gascity
+brew link flock 2>/dev/null || true
 
 # --- Bashrc block (abbreviated; see the script for the full version) ---
 cat >> ~/.bashrc <<'EOF'
@@ -156,6 +158,7 @@ sudo apt-get update && sudo apt-get upgrade           # system packages (also au
 - **nvm is not `set -u`-clean.** That's why the script now wraps the `nvm install/use/alias` calls instead of invoking them bare under `set -euo pipefail`.
 - **Linuxbrew prefix is a directory, not your home.** `/home/linuxbrew/.linuxbrew` is created by the installer (owned by the `linuxbrew` user it also creates). Don't try to `rm -rf` it without also removing the user/group. If you ever want to uninstall, follow the official Homebrew uninstall script.
 - **`brew install gastown` conflicts with `genometools` and `libslax`** (they all ship a binary called `gt`). On a bare VPS this doesn't matter; if you later install either of those by accident, you'll get a PATH collision.
+- **`brew install gastownhall/gascity/gascity` can conflict with the standalone brew `flock` formula.** `gascity` pulls `util-linux`, and both ship a `flock` binary. The script now temporarily unlinks brew `flock` around the `gascity` install and re-links it afterward.
 - **npm global packages live in the current Node version's prefix.** Switching Node via `nvm use <other>` hides globally-installed Claude Code / Codex. Either stick to LTS or `npm install -g` again after a version swap.
 - **Codex and Claude Code first-run auth.** Both need browser-based auth. On a headless VPS, they print a URL you open on your laptop, paste the code, and that's it.
 - **Atuin sync is off by default.** If you want cross-machine history, run `atuin register` then `atuin sync` — but be aware the server has your full shell history (E2E encrypted, but still a trust decision).
