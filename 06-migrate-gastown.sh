@@ -79,7 +79,7 @@ fi
 
 # Toolchain check: fail fast with a specific message rather than blowing up
 # halfway through with an obscure 'command not found'.
-for cmd in git dolt go; do
+for cmd in git dolt go gt bd; do
     if ! command -v "$cmd" &> /dev/null; then
         error "'$cmd' not found on PATH. Run earlier setup scripts first."
         exit 1
@@ -149,13 +149,32 @@ MANIFEST="$TARBALL_DIR/MANIFEST-${STAMP}.sha256"
 
 if [[ -f "$MANIFEST" ]]; then
     log "Verifying against $MANIFEST..."
-    # shasum -c reads the manifest and checks each file. The manifest uses
-    # basenames, so we must run it from the dir where the tarballs live.
-    (cd "$TARBALL_DIR" && sha256sum -c "$(basename "$MANIFEST")") || {
-        error "sha256 verification failed! Tarballs may be corrupted in transit."
-        error "Re-scp from laptop and try again."
-        exit 1
+    # Verify only the artifacts the user actually supplied. The Claude tarball
+    # is optional, so a manifest containing both files must not block a
+    # dolt-only restore.
+    verify_artifact() {
+        local artifact_path="$1"
+        local artifact_name expected actual
+        artifact_name="$(basename "$artifact_path")"
+        expected="$(awk -v file="$artifact_name" '$2 == file { print $1; exit }' "$MANIFEST")"
+
+        if [[ -z "$expected" ]]; then
+            error "Manifest $MANIFEST has no checksum entry for $artifact_name"
+            exit 1
+        fi
+
+        actual="$(sha256sum "$artifact_path" | awk '{print $1}')"
+        if [[ "$actual" != "$expected" ]]; then
+            error "sha256 verification failed for $artifact_name"
+            error "Expected: $expected"
+            error "Actual:   $actual"
+            error "Re-scp from laptop and try again."
+            exit 1
+        fi
     }
+
+    verify_artifact "$DOLT_TARBALL"
+    [[ -n "$CLAUDE_TARBALL" ]] && verify_artifact "$CLAUDE_TARBALL"
     ok "Tarballs verified intact"
 else
     warn "No manifest found — skipping integrity check"

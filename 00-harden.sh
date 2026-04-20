@@ -393,36 +393,40 @@ fi
 
 log "Hardening SSH configuration..."
 SSH_CONFIG="/etc/ssh/sshd_config"
+SSH_DROPIN_DIR="/etc/ssh/sshd_config.d"
+SSH_DROPIN="$SSH_DROPIN_DIR/00-vps-setup-hardening.conf"
 
-# Back up the original config so we can revert if something goes wrong.
-# Include timestamp so re-runs don't clobber the original backup.
+# On modern Ubuntu/Debian images, sshd_config often includes
+# /etc/ssh/sshd_config.d/* near the top and OpenSSH keeps the FIRST value it
+# sees for single-value options. That means appending settings to the end of
+# sshd_config can silently lose to an earlier cloud-init drop-in.
+#
+# Fix: manage our policy in an early-numbered drop-in so our values are read
+# during the Include pass and win over later defaults in sshd_config itself.
+mkdir -p "$SSH_DROPIN_DIR"
+
+# Back up the files we own or depend on before replacing them.
 cp "$SSH_CONFIG" "${SSH_CONFIG}.backup.$(date +%Y%m%d-%H%M%S)"
+[[ -f "$SSH_DROPIN" ]] && cp "$SSH_DROPIN" "${SSH_DROPIN}.backup.$(date +%Y%m%d-%H%M%S)"
 
-# We use a helper to set config options: remove any existing line for the
-# key (commented or not), then append the new value. This is more robust
-# than sed'ing in place, which can fail on commented-out lines.
-set_ssh_option() {
-    local key="$1"
-    local value="$2"
-    # Remove any existing line (commented or not) setting this option
-    sed -i "/^#*\s*${key}\s/d" "$SSH_CONFIG"
-    # Append the new setting
-    echo "${key} ${value}" >> "$SSH_CONFIG"
-}
+cat > "$SSH_DROPIN" <<EOF
+# Managed by 00-harden.sh
+# See /etc/ssh/sshd_config for the base config and distro defaults.
 
-set_ssh_option "Port" "$SSH_PORT"
-set_ssh_option "PermitRootLogin" "no"
-set_ssh_option "PasswordAuthentication" "no"
-set_ssh_option "KbdInteractiveAuthentication" "yes"
-set_ssh_option "UsePAM" "yes"
-set_ssh_option "PubkeyAuthentication" "yes"
-set_ssh_option "PermitEmptyPasswords" "no"
-set_ssh_option "X11Forwarding" "no"
-set_ssh_option "MaxAuthTries" "3"
-set_ssh_option "ClientAliveInterval" "300"
-set_ssh_option "ClientAliveCountMax" "2"
-set_ssh_option "AllowUsers" "$NEW_USER"
-set_ssh_option "AuthenticationMethods" "publickey keyboard-interactive:pam"
+Port $SSH_PORT
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication yes
+UsePAM yes
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+X11Forwarding no
+MaxAuthTries 3
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowUsers $NEW_USER
+AuthenticationMethods publickey keyboard-interactive:pam
+EOF
 
 # ----------------------------------------------------------------------------
 # Step 8b: Configure PAM to require TOTP on the keyboard-interactive path

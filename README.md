@@ -47,6 +47,11 @@ non-interactive). Password+TOTP is a backup for devices without your key —
 your phone, a friend's laptop, a public machine in a pinch. Plain
 password-only auth (without TOTP) is never accepted.
 
+Under the hood, `00-harden.sh` writes that SSH policy to a managed
+`/etc/ssh/sshd_config.d/00-vps-setup-hardening.conf` drop-in rather than
+appending to the tail of `sshd_config`. That matters on newer OpenSSH
+packages, where distro drop-ins are included early and first-set values win.
+
 **Before it locks down SSH**, the script pauses and asks you to verify in a
 separate terminal that you can log in as the new user with your key.
 Don't skip that check. It also offers an optional second verification for
@@ -103,6 +108,10 @@ chmod +x 06-migrate-gastown.sh
 #   4. Build gt+bd from the local source (matches laptop commit exactly)
 #   5. Start the daemon and run `gt doctor`
 ```
+
+The Claude tarball remains optional on restore. If you omit it,
+`06-migrate-gastown.sh` now verifies only the tarballs you actually provide
+instead of failing because the manifest also contains `claude-*.tar.gz`.
 
 **Before exporting**, do yourself a favor:
 - `cd ~/gt && git status` — push anything uncommitted; the VPS will git-clone from GitHub
@@ -181,7 +190,7 @@ apps, graphics protocols). Fine for pure-text SSH sessions.
 
 **Idempotent.** Every script should be safe to re-run. If something is already set up, the script detects that and skips it rather than clobbering working config. Specifically:
 
-- `00-harden.sh` appends SSH keys to `authorized_keys` instead of overwriting; `ufw` rules are additive (no `--force reset`) so any rules you add later survive a rerun.
+- `00-harden.sh` appends SSH keys to `authorized_keys` instead of overwriting; `ufw` rules are additive (no `--force reset`) so any rules you add later survive a rerun. Its SSH auth policy lives in a managed `sshd_config.d` drop-in, which is more reliable than appending to the tail of `sshd_config` on newer OpenSSH packages.
 - `02-setup-git.sh` manages a BEGIN/END block in `~/.gitignore_global`; edits you make outside those markers are preserved across reruns. It also refuses to overwrite an existing `Host github.com` SSH config block that points to a different key.
 - `03-install-dolt.sh` unsets before `--add`-ing dolt config so user.name/email don't grow duplicate entries on rerun.
 

@@ -107,7 +107,7 @@ cleanup_stress() {
     pkill -P $$ bc 2>/dev/null || true
     wait 2>/dev/null || true
 }
-trap 'cleanup_stress; rm -f "$TESTFILE" 2>/dev/null || true' INT TERM EXIT
+trap 'cleanup_stress; [[ -n "${TESTFILE:-}" ]] && rm -f "${TESTFILE:-}" 2>/dev/null || true' INT TERM EXIT
 
 # Sample vmstat for 60 seconds at 1-second intervals.
 # Column 16 (space-separated) is steal time on modern kernels.
