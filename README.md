@@ -38,10 +38,19 @@ The hardening script will prompt you for:
 
 1. A username for the new non-root account
 2. Your SSH public key (paste it; ed25519 is recommended)
-3. A password for the new user — required for `sudo`. Not used for SSH login (SSH stays key-only), but the script will refuse to continue without one set
+3. A password for the new user — used for `sudo` AND for the password+TOTP SSH path (see below)
+4. TOTP enrollment: mid-script, a QR code is printed. Scan it with an authenticator app (Authy, 1Password, Bitwarden, Microsoft Authenticator, Google Authenticator — all work, TOTP is an open standard) and save the emergency scratch codes
+
+**Auth model:** sshd is configured so *either* a valid SSH key *or*
+password+TOTP is sufficient to log in. Keys are the primary path (fast,
+non-interactive). Password+TOTP is a backup for devices without your key —
+your phone, a friend's laptop, a public machine in a pinch. Plain
+password-only auth (without TOTP) is never accepted.
 
 **Before it locks down SSH**, the script pauses and asks you to verify in a
-separate terminal that you can log in as the new user. Don't skip that check.
+separate terminal that you can log in as the new user with your key.
+Don't skip that check. It also offers an optional second verification for
+the password+TOTP path after sshd is reconfigured.
 
 After hardening completes, log in as your new user:
 

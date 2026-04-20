@@ -9,13 +9,16 @@
 # WHAT IT DOES:
 #   1. Updates all packages (patches known vulnerabilities)
 #   2. Creates a non-root sudo user (root should not be used for daily work)
-#   3. Sets up SSH key authentication (passwords are brute-forceable)
-#   4. Disables root login and password auth over SSH
-#   5. Configures UFW firewall (deny-by-default is the only sane policy)
-#   6. Installs fail2ban (auto-bans brute-force attempts)
-#   7. Enables unattended security upgrades
-#   8. Applies sysctl kernel hardening
-#   9. Installs basic monitoring tools (htop, iotop, vmstat, etc.)
+#   3. Sets up SSH key authentication
+#   4. Enrolls the new user in TOTP (2FA) so password+TOTP is also accepted —
+#      lets you SSH from devices without your key (phone, friend's laptop)
+#   5. Disables root login; configures sshd to accept EITHER pubkey OR
+#      password+TOTP (via AuthenticationMethods)
+#   6. Configures UFW firewall (deny-by-default is the only sane policy)
+#   7. Installs fail2ban (auto-bans brute-force attempts)
+#   8. Enables unattended security upgrades
+#   9. Applies sysctl kernel hardening
+#  10. Installs basic monitoring tools (htop, iotop, vmstat, etc.)
 #
 # USAGE:
 #   Run ONCE on a fresh VPS as root:
@@ -30,11 +33,16 @@
 #     - Optionally, a custom SSH port
 #
 # IMPORTANT:
-#   This script will disable root SSH and password auth. Before it restarts
-#   sshd, it will ask you to confirm you can log in as the new user from
-#   a SECOND terminal. Do NOT skip this check or you may lock yourself out.
-#   If you do get locked out, Contabo provides a web-based VNC console in
-#   their control panel as a recovery option.
+#   This script will disable root SSH and enable a two-track auth model
+#   (pubkey OR password+TOTP). Before it restarts sshd, it will ask you to
+#   confirm you can log in as the new user with your key from a SECOND
+#   terminal. Do NOT skip this check or you may lock yourself out. If you
+#   do get locked out, Contabo provides a web-based VNC console in their
+#   control panel as a recovery option.
+#
+#   For TOTP you'll need an authenticator app (Authy, 1Password, Bitwarden,
+#   Microsoft Authenticator, Google Authenticator — any RFC 6238 client).
+#   The script prints a QR code at enrollment time; scan it with your app.
 
 set -euo pipefail  # Exit on error, undefined var, or failed pipe — fail loudly, not silently
 
@@ -138,6 +146,10 @@ ok "System updated"
 #   - curl/wget: needed by pretty much everything else
 #   - rsync: for backups/migrations later
 #   - git: needed for most dev workflows
+#   - libpam-google-authenticator: PAM module implementing TOTP (RFC 6238).
+#     Works with any standard authenticator app (Authy, 1Password, Bitwarden,
+#     Microsoft Authenticator, etc.) — the "google" in the name is historical.
+#   - qrencode: lets google-authenticator print a scannable QR code in-terminal
 
 log "Installing security and utility packages..."
 apt-get install -y -qq \
@@ -154,7 +166,9 @@ apt-get install -y -qq \
     git \
     ca-certificates \
     gnupg \
-    software-properties-common
+    software-properties-common \
+    libpam-google-authenticator \
+    qrencode
 ok "Packages installed"
 
 # ----------------------------------------------------------------------------
@@ -256,6 +270,62 @@ chown -R "$NEW_USER:$NEW_USER" "$USER_HOME/.ssh"
 ok "SSH key installed for $NEW_USER"
 
 # ----------------------------------------------------------------------------
+# Step 5b: Enroll TOTP (2FA) for password-based SSH
+# ----------------------------------------------------------------------------
+# We configure sshd below to accept EITHER a valid key OR password+TOTP.
+# Keys are the primary auth path (fast, non-interactive, used by automation).
+# Password+TOTP is the backup path — handy when you need to SSH from a device
+# that doesn't have your key (phone, friend's laptop, etc.).
+#
+# Enrollment runs `google-authenticator` as the new user. The tool writes a
+# secret to ~/.google_authenticator and prints a QR code; scan it with any
+# RFC 6238 authenticator (Authy, 1Password, Bitwarden, MS Authenticator,
+# Google Authenticator). Flags used:
+#   --time-based        TOTP (not HOTP counter-based)
+#   --disallow-reuse    each 6-digit code usable only once
+#   --force             overwrite existing secret file non-interactively
+#   --rate-limit=3      --rate-time=30: throttle brute-force (3 tries / 30s)
+#   --window-size=3     accept codes from ±1 step (±30s) to tolerate clock skew
+#   --qr-mode=ANSI      print QR directly in the terminal
+#
+# Idempotency: if ~/.google_authenticator already exists, we skip re-enrollment
+# so reruns don't invalidate the user's current enrollment (which would break
+# any logged-in sessions relying on it).
+
+TOTP_FILE="$USER_HOME/.google_authenticator"
+if [[ -s "$TOTP_FILE" ]]; then
+    ok "TOTP already enrolled for $NEW_USER — skipping (delete $TOTP_FILE to re-enroll)"
+else
+    echo ""
+    warn "=========================================================================="
+    warn "TOTP enrollment for $NEW_USER"
+    warn ""
+    warn "A QR code will print below. Scan it with an authenticator app:"
+    warn "  - Authy, 1Password, Bitwarden, Microsoft Authenticator, or Google Authenticator"
+    warn ""
+    warn "The app will start generating 6-digit codes that rotate every 30 seconds."
+    warn "You'll enter one on SSH login (in addition to your password) when you"
+    warn "don't have your SSH key handy. Also: save the printed emergency scratch"
+    warn "codes somewhere safe (password manager). They're your recovery path if"
+    warn "you lose the authenticator app."
+    warn "=========================================================================="
+    echo ""
+
+    sudo -u "$NEW_USER" google-authenticator \
+        --time-based \
+        --disallow-reuse \
+        --force \
+        --rate-limit=3 \
+        --rate-time=30 \
+        --window-size=3 \
+        --qr-mode=ANSI
+
+    chmod 600 "$TOTP_FILE"
+    chown "$NEW_USER:$NEW_USER" "$TOTP_FILE"
+    ok "TOTP enrolled for $NEW_USER"
+fi
+
+# ----------------------------------------------------------------------------
 # Step 6: Configure sudo to require password
 # ----------------------------------------------------------------------------
 # By default on Ubuntu, sudo asks for password — good. But we want to make
@@ -298,10 +368,23 @@ fi
 # ----------------------------------------------------------------------------
 # Step 8: Harden SSH daemon configuration
 # ----------------------------------------------------------------------------
-# These changes dramatically reduce SSH attack surface:
+# These changes dramatically reduce SSH attack surface while supporting a
+# dual-track auth model (pubkey OR password+TOTP):
+#
 #   - PermitRootLogin no: root can't SSH in at all (must use sudo from user)
-#   - PasswordAuthentication no: only key-based auth works
-#   - PubkeyAuthentication yes: explicitly enable keys (usually already on)
+#   - PasswordAuthentication no: the legacy password-only code path is off —
+#     passwords are accepted only through keyboard-interactive/PAM, which is
+#     where we layer TOTP on top.
+#   - KbdInteractiveAuthentication yes: enables the PAM-backed interactive
+#     auth path (password + TOTP prompt).
+#   - UsePAM yes: required for keyboard-interactive to go through PAM, which
+#     is where pam_google_authenticator.so runs.
+#   - PubkeyAuthentication yes: explicitly enable keys.
+#   - AuthenticationMethods "publickey keyboard-interactive:pam":
+#     SPACE-separated means "any of these methods works" (OR). Key users
+#     skip TOTP entirely; password-only users go through PAM, which requires
+#     password (via @include common-auth) AND TOTP (via pam_google_authenticator).
+#     That's 2FA by construction for the password path.
 #   - MaxAuthTries 3: drop connection after 3 failed attempts
 #   - ClientAliveInterval/CountMax: disconnect idle sessions after ~10 min
 #     (prevents dangling sessions from being hijacked)
@@ -330,6 +413,8 @@ set_ssh_option() {
 set_ssh_option "Port" "$SSH_PORT"
 set_ssh_option "PermitRootLogin" "no"
 set_ssh_option "PasswordAuthentication" "no"
+set_ssh_option "KbdInteractiveAuthentication" "yes"
+set_ssh_option "UsePAM" "yes"
 set_ssh_option "PubkeyAuthentication" "yes"
 set_ssh_option "PermitEmptyPasswords" "no"
 set_ssh_option "X11Forwarding" "no"
@@ -337,8 +422,36 @@ set_ssh_option "MaxAuthTries" "3"
 set_ssh_option "ClientAliveInterval" "300"
 set_ssh_option "ClientAliveCountMax" "2"
 set_ssh_option "AllowUsers" "$NEW_USER"
+set_ssh_option "AuthenticationMethods" "publickey keyboard-interactive:pam"
 
-# Validate the config before reloading — if there's a syntax error,
+# ----------------------------------------------------------------------------
+# Step 8b: Configure PAM to require TOTP on the keyboard-interactive path
+# ----------------------------------------------------------------------------
+# /etc/pam.d/sshd is Ubuntu's PAM stack for sshd logins. It ships with
+# '@include common-auth' near the top (handles UNIX password). We append
+# pam_google_authenticator.so AFTER common-auth so the user must:
+#   1. Enter their UNIX password (common-auth succeeds)
+#   2. Then enter their current TOTP code (pam_google_authenticator succeeds)
+# Both must pass for keyboard-interactive auth to succeed.
+#
+# We add a marker comment so reruns can detect and skip the edit idempotently.
+
+log "Configuring PAM for TOTP on sshd..."
+PAM_SSHD="/etc/pam.d/sshd"
+PAM_MARKER="# Added by 00-harden.sh: TOTP required on keyboard-interactive path"
+
+if grep -qF "$PAM_MARKER" "$PAM_SSHD"; then
+    ok "TOTP already configured in $PAM_SSHD — skipping"
+else
+    cp "$PAM_SSHD" "${PAM_SSHD}.backup.$(date +%Y%m%d-%H%M%S)"
+    # Insert after the '@include common-auth' line. 'nullok' would let users
+    # without ~/.google_authenticator pass — we want the opposite: if you
+    # didn't enroll, you can't use the password path. So: no nullok.
+    sed -i "/^@include common-auth/a ${PAM_MARKER}\nauth required pam_google_authenticator.so" "$PAM_SSHD"
+    ok "TOTP required on keyboard-interactive SSH (PAM configured)"
+fi
+
+# Validate the sshd config before reloading — if there's a syntax error,
 # sshd will fail to start and you'll be locked out.
 if ! sshd -t; then
     error "SSH config validation failed! Not restarting sshd. Restore from backup:"
@@ -347,7 +460,43 @@ if ! sshd -t; then
 fi
 
 systemctl restart sshd
-ok "SSH hardened (port $SSH_PORT, root disabled, password auth disabled)"
+ok "SSH hardened (port $SSH_PORT, root disabled, pubkey-or-password+TOTP)"
+
+# ----------------------------------------------------------------------------
+# Step 8c: Second verification gate — password+TOTP path
+# ----------------------------------------------------------------------------
+# The earlier gate (Step 7) only verified the pubkey path. If password+TOTP
+# is misconfigured (wrong PAM stack, wrong ~/.google_authenticator perms,
+# authenticator-app clock skew, etc.), the user won't find out until they
+# try to log in from a device without their key — usually at the worst
+# possible moment. Verify now while we still have a root terminal open.
+#
+# This gate is NOT fatal: if the user skips it, the pubkey path still works
+# and they can debug TOTP later. But strongly encouraged.
+
+echo ""
+warn "=========================================================================="
+warn "OPTIONAL: Verify password+TOTP login works"
+warn ""
+warn "From a NEW terminal window, try:"
+warn ""
+warn "    ssh -o PreferredAuthentications=keyboard-interactive \\"
+warn "        -o PubkeyAuthentication=no \\"
+warn "        -p $SSH_PORT $NEW_USER@$(hostname -I | awk '{print $1}')"
+warn ""
+warn "You should be prompted for: (1) your UNIX password, (2) a 6-digit TOTP code."
+warn ""
+warn "If this fails, your pubkey path still works — but you'll want to fix TOTP"
+warn "before you need it from a keyless device. Common causes:"
+warn "  - Clock skew on the authenticator app (enable time-sync in app settings)"
+warn "  - Wrong password (reset with: sudo passwd $NEW_USER)"
+warn "  - QR not scanned correctly (re-enroll: rm $TOTP_FILE and rerun this script)"
+warn "=========================================================================="
+echo ""
+read -rp "Verified password+TOTP (or skipping)? [y/N] " TOTP_VERIFIED
+if [[ "$TOTP_VERIFIED" != "y" && "$TOTP_VERIFIED" != "Y" ]]; then
+    warn "Skipped password+TOTP verification. Pubkey path still works."
+fi
 
 # ----------------------------------------------------------------------------
 # Step 9: Configure UFW firewall
@@ -539,7 +688,8 @@ echo "Summary of what was done:"
 echo "  ✓ System fully updated"
 echo "  ✓ User '$NEW_USER' created with sudo access"
 echo "  ✓ SSH key installed for $NEW_USER"
-echo "  ✓ SSH hardened: port $SSH_PORT, no root, no passwords"
+echo "  ✓ TOTP (2FA) enrolled for $NEW_USER — secret at ~/.google_authenticator"
+echo "  ✓ SSH hardened: port $SSH_PORT, no root, pubkey-or-password+TOTP"
 echo "  ✓ UFW firewall enabled (only SSH allowed inbound)"
 echo "  ✓ fail2ban watching SSH"
 echo "  ✓ Automatic security updates enabled"
