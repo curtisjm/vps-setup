@@ -17,9 +17,10 @@
 10. **Claude Code CLI.** `npm install -g @anthropic-ai/claude-code`. First-run auth happens when you invoke `claude`.
 11. **OpenAI Codex CLI.** `npm install -g @openai/codex`. First-run auth is `codex login`.
 12. **Atuin.** Shell history replacement with fuzzy search, per-directory context, and optional E2E-encrypted sync. Installs via the official installer from `setup.atuin.sh`, which drops a binary at `~/.atuin/bin/atuin`. Sync is opt-in — the default is local-only, which is saner on a VPS.
-13. **Gas Town binaries.** `go install github.com/steveyegge/gastown/cmd/gt@latest` and `github.com/steveyegge/beads/cmd/bd@latest`. Lands binaries in `~/go/bin`. Wasteland (`wl`) is skipped — optional, and you might want it from a fork.
-14. **Shell customizations.** Appends a marker-gated block to `~/.bashrc` with: HISTSIZE/HISTFILESIZE, shared history across tmux panes, PATH additions for `~/.local/bin`, `~/.cargo/bin`, `/usr/local/go/bin`, `~/go/bin`, `~/.atuin/bin`, `direnv hook bash`, `atuin init bash --disable-up-arrow`, a small set of aliases (`ll`, `la`, `..`, `grep --color`, `df -h`, etc.), and two diagnostic aliases: `steal` (watches vmstat's `st` column, the Contabo noisy-neighbor metric) and `bigfiles` (top 20 disk-users in CWD).
-15. **tmux config.** Writes a minimal `~/.tmux.conf` if one doesn't exist: Ctrl-a prefix (easier than Ctrl-b), mouse on, 50k history, `|` and `-` for splits, pane numbering from 1.
+13. **Linuxbrew.** Runs the official installer (`NONINTERACTIVE=1 CI=1` to skip prompts) which lays brew down at `/home/linuxbrew/.linuxbrew`. Sources `brew shellenv` into the current script so the next step can call `brew`. The bashrc block in step 15 wires brew shellenv into future shells.
+14. **Gas Town binaries via brew.** `brew install gastown`, `brew install beads`, `brew install gastownhall/gascity/gascity`. These match Curtis's laptop install (both run from `/opt/homebrew/bin` on macOS / `/home/linuxbrew/.linuxbrew/bin` on Linux). Updates flow through `brew upgrade`. The `~/gt/gastown/mayor/rig` and `~/gt/gascity/mayor/rig` checkouts (cloned later by `06-migrate-gastown.sh`) are DEV workspaces, not the install source. Wasteland (`wl`) is skipped — optional, and the upstream fork situation varies.
+15. **Shell customizations.** Appends a marker-gated block to `~/.bashrc` with: HISTSIZE/HISTFILESIZE, shared history across tmux panes, PATH additions for `~/.local/bin`, `~/.cargo/bin`, `/usr/local/go/bin`, `~/go/bin`, `~/.atuin/bin`, `brew shellenv` for Linuxbrew (so `gt`/`bd`/`gc` resolve from `/home/linuxbrew/.linuxbrew/bin` in every shell), `direnv hook bash`, `atuin init bash --disable-up-arrow`, a small set of aliases (`ll`, `la`, `..`, `grep --color`, `df -h`, etc.), and two diagnostic aliases: `steal` (watches vmstat's `st` column, the Contabo noisy-neighbor metric) and `bigfiles` (top 20 disk-users in CWD).
+16. **tmux config.** Writes a minimal `~/.tmux.conf` if one doesn't exist: Ctrl-a prefix (easier than Ctrl-b), mouse on, 50k history, `|` and `-` for splits, pane numbering from 1.
 
 The marker (`# === VPS setup customizations ===`) guards against duplicate appends on rerun; the tmux config is only written if the file doesn't exist (so personal tweaks survive). Most steps have a `command -v <tool> && skip` idiom so rerunning the script is safe.
 
@@ -89,10 +90,15 @@ npm install -g @openai/codex
 # --- Atuin ---
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 
-# --- Gas Town binaries ---
-mkdir -p ~/go/bin
-go install github.com/steveyegge/gastown/cmd/gt@latest
-go install github.com/steveyegge/beads/cmd/bd@latest
+# --- Linuxbrew (for gt, bd, gc) ---
+NONINTERACTIVE=1 CI=1 /bin/bash -c \
+    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+
+# --- Gas Town binaries via brew ---
+brew install gastown
+brew install beads
+brew install gastownhall/gascity/gascity
 
 # --- Bashrc block (abbreviated; see the script for the full version) ---
 cat >> ~/.bashrc <<'EOF'
@@ -104,6 +110,7 @@ PROMPT_COMMAND="history -a; history -n; ${PROMPT_COMMAND:-}"
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 [[ -d /usr/local/go/bin ]] && export PATH="$PATH:/usr/local/go/bin"
 [[ -d $HOME/go/bin ]]      && export PATH="$PATH:$HOME/go/bin"
+[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 [[ -x $HOME/.atuin/bin/atuin ]] && export PATH="$HOME/.atuin/bin:$PATH"
 command -v direnv &>/dev/null && eval "$(direnv hook bash)"
 command -v atuin  &>/dev/null && eval "$(atuin init bash --disable-up-arrow)"
@@ -116,18 +123,33 @@ source ~/.bashrc
 
 ## Why this way
 
-- **`go install @latest` for gt/bd** (not a binary release): upstream doesn't ship per-commit binaries, and `go install` gives you a build reproducibly tied to your local Go toolchain. `06-migrate-gastown.sh` will overwrite these with `make install` from your tracked `~/gt` checkout if you want the exact commit your laptop is on.
+- **Linuxbrew for gt/bd/gc (not `go install` or `make install` from source).** Curtis's laptop installs these three via Homebrew; mirroring that on the VPS means updating all three with `brew upgrade` instead of pulling source and re-building. Upstream publishes signed release binaries through goreleaser, which brew fetches — no local build step. `go install @latest` was previously used here but drifts to whatever upstream tagged last and doesn't cleanly handle the three-tool set (`gc` isn't easily installable that way).
+- **The `~/gt/gastown/mayor/rig` checkout is NOT the install source.** It's a dev workspace for contributing upstream. If you `make install` from there you overwrite the brew binary with an unsigned fork HEAD, which is almost never what you want. 06's migration script deliberately does not build from it anymore.
+- **Go is still installed** — for Go-based dev work (building from source when you're actively hacking on gastown/beads, running `go test` in the rig checkouts). It is no longer the install path for the daily-driver gt/bd.
 - **Pinned Go version (1.24.12).** Tracking `latest` silently shifts your toolchain under you. Bumping is a one-line edit when gastown's minimum moves.
 - **Arch detection.** `dpkg --print-architecture` means this works on both amd64 Contabo VPSes and arm64 Hetzner/Oracle boxes without editing the script.
 - **`pipx` for Python CLIs, `pip` for libraries.** Breaking `pip install --user` into the system site-packages is the #1 way to end up with unrelentingly bizarre Python errors. `pipx` gives each CLI its own venv.
 - **Atuin with `--disable-up-arrow`.** The default binds Atuin to Up Arrow in addition to Ctrl-R, which overrides the vanilla shell history behaviour you're still used to. Most people prefer to keep Up Arrow doing what it always did.
 - **Docker is optional but kept in.** If you don't want it, comment out the Docker block. The script's designed so skipping it doesn't break anything downstream.
-- **Idempotent.** Every step either checks for the tool first (`command -v ...`) or uses a marker in bashrc. You can rerun this entire script any time and it won't double-up on PATH entries or re-install Go.
+- **Idempotent.** Every step either checks for the tool first (`command -v ...`) or uses a marker in bashrc. You can rerun this entire script any time and it won't double-up on PATH entries, re-install Go, or re-install Linuxbrew.
+
+## Keeping things up to date
+
+```bash
+brew update && brew upgrade                           # gt, bd, gc, and any other brew tools
+npm install -g @anthropic-ai/claude-code@latest       # Claude Code
+npm install -g @openai/codex@latest                   # Codex
+sudo apt-get update && sudo apt-get upgrade           # system packages (also auto-patched by unattended-upgrades)
+```
+
+`npm update -g` is unreliable for major-version bumps; `npm install -g <pkg>@latest` is the blessed path for both Claude Code and Codex. Both will pick up the new version next time you invoke the CLI — no restart needed. System patches flow automatically via `unattended-upgrades` (configured by 00), so `apt upgrade` is usually a no-op; run it manually if you want to pull current security fixes without waiting for the cron.
 
 ## Known gotchas
 
 - **Docker requires re-login** before `docker` works without `sudo`. The script warns about this but doesn't force it — you can just log out and back in after the script finishes.
 - **`source ~/.bashrc`** is required at the end for the new PATH and aliases to take effect in your current shell. Don't skip this and then wonder why `gt` isn't found.
-- **`npm install -g` global flags.** The CLAUDE.md policy here is "no homebrew installs" — we're on Linux so this is moot, but worth noting that globally-installed npm packages install into nvm's current node prefix (`~/.nvm/versions/node/...`). Switching Node versions will switch which global packages are visible; reinstall if that bites you.
+- **Linuxbrew prefix is a directory, not your home.** `/home/linuxbrew/.linuxbrew` is created by the installer (owned by the `linuxbrew` user it also creates). Don't try to `rm -rf` it without also removing the user/group. If you ever want to uninstall, follow the official Homebrew uninstall script.
+- **`brew install gastown` conflicts with `genometools` and `libslax`** (they all ship a binary called `gt`). On a bare VPS this doesn't matter; if you later install either of those by accident, you'll get a PATH collision.
+- **npm global packages live in the current Node version's prefix.** Switching Node via `nvm use <other>` hides globally-installed Claude Code / Codex. Either stick to LTS or `npm install -g` again after a version swap.
 - **Codex and Claude Code first-run auth.** Both need browser-based auth. On a headless VPS, they print a URL you open on your laptop, paste the code, and that's it.
 - **Atuin sync is off by default.** If you want cross-machine history, run `atuin register` then `atuin sync` — but be aware the server has your full shell history (E2E encrypted, but still a trust decision).

@@ -13,10 +13,13 @@
 #   4. Verifies sha256 of transferred tarballs against the manifest.
 #   5. Extracts the Dolt tarball into $GT_TOWN_ROOT/.dolt-data.
 #   6. Extracts the ~/.claude tarball (if provided).
-#   7. Installs Gas Town binaries from the local checkout (matches laptop
-#      commit exactly — preferred over `go install @latest`).
-#   8. Starts the Dolt server and runs `gt doctor` to validate.
-#   9. Prints next steps (re-auth gh/claude, onyx recovery, etc.).
+#   7. Starts the Dolt server and runs `gt doctor` to validate.
+#   8. Prints next steps (re-auth gh/claude, onyx recovery, etc.).
+#
+# NOTE: This script does NOT build gt/bd/gc from the ~/gt checkouts. Those
+# checkouts are dev workspaces; the installed binaries come from Linuxbrew
+# (configured by 01-install-dev-tools.sh). Update tools with `brew upgrade`,
+# not from source.
 #
 # USAGE:
 #   ./06-migrate-gastown.sh <dolt-tarball> [claude-tarball]
@@ -78,8 +81,10 @@ if [[ -n "$CLAUDE_TARBALL" && ! -f "$CLAUDE_TARBALL" ]]; then
 fi
 
 # Toolchain check: fail fast with a specific message rather than blowing up
-# halfway through with an obscure 'command not found'.
-for cmd in git dolt go gt bd; do
+# halfway through with an obscure 'command not found'. gt/bd come from
+# Linuxbrew (installed by 01); we don't need `go` here since we no longer
+# build from source.
+for cmd in git dolt gt bd; do
     if ! command -v "$cmd" &> /dev/null; then
         error "'$cmd' not found on PATH. Run earlier setup scripts first."
         exit 1
@@ -226,36 +231,22 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# Step 6: Install Gas Town binaries from the local checkout
+# Step 6: Confirm gt/bd versions (installed from brew by 01)
 # ----------------------------------------------------------------------------
-# 01-install-dev-tools.sh already ran `go install ...@latest`, but that
-# pulls the latest tagged release from upstream. Your laptop may be on a
-# specific commit or a carry branch. We prefer `make install` from the
-# cloned ~/gt/gastown/mayor/rig/ so the VPS binary matches exactly.
+# We deliberately do NOT `make install` from the ~/gt/gastown/mayor/rig or
+# ~/gt/beads/mayor/rig checkouts. Those are dev workspaces for contributing
+# upstream — not the source of the binary Curtis uses day-to-day. The
+# daily-driver gt/bd/gc came from Linuxbrew in step 01, and updates flow
+# through `brew upgrade`.
 #
-# Skip silently if the expected path doesn't exist (e.g. if gastown isn't
-# a submodule in your fork) — the `go install` version from 01 is a fine
-# fallback.
+# If you specifically want to run a fork's build for testing, do it manually:
+#     make -C ~/gt/gastown/mayor/rig install SKIP_UPDATE_CHECK=1
+# ...but be aware that overwrites the brew binary until the next `brew reinstall`.
 
-GASTOWN_SRC="$GT_ROOT/gastown/mayor/rig"
-
-if [[ -d "$GASTOWN_SRC" && -f "$GASTOWN_SRC/Makefile" ]]; then
-    log "Building gt from $GASTOWN_SRC (matches laptop commit)..."
-    # SKIP_UPDATE_CHECK bypasses the 'am I on latest main' check that fails on
-    # detached heads and fork branches.
-    make -C "$GASTOWN_SRC" install SKIP_UPDATE_CHECK=1
-    ok "gt installed from local source: $(gt version 2>/dev/null | head -1)"
-else
-    warn "$GASTOWN_SRC not found — keeping gt from 'go install @latest'"
-fi
-
-# Beads: similarly prefer local source if we have it.
-BEADS_SRC="$GT_ROOT/beads/mayor/rig"
-if [[ -d "$BEADS_SRC" && -f "$BEADS_SRC/Makefile" ]]; then
-    log "Building bd from $BEADS_SRC..."
-    make -C "$BEADS_SRC" install || warn "bd local build failed — keeping go install version"
-    ok "bd installed from local source: $(bd version 2>/dev/null | head -1)"
-fi
+log "Confirming Gas Town toolchain versions..."
+log "  gt: $(gt version 2>/dev/null | head -1 || echo 'unknown')"
+log "  bd: $(bd version 2>/dev/null | head -1 || echo 'unknown')"
+command -v gc &> /dev/null && log "  gc: $(gc version 2>/dev/null | head -1 || echo 'unknown')"
 
 # ----------------------------------------------------------------------------
 # Step 7: Start Dolt and validate
@@ -311,7 +302,7 @@ echo "  ✓ ~/gt cloned from $GT_REPO_URL"
 echo "  ✓ Submodules initialized"
 echo "  ✓ .dolt-data restored ($(du -sh "$GT_ROOT/.dolt-data" | awk '{print $1}'))"
 [[ -n "$CLAUDE_TARBALL" ]] && echo "  ✓ ~/.claude restored"
-echo "  ✓ gt + bd installed"
+echo "  ✓ gt/bd/gc already installed from brew (update with: brew upgrade)"
 echo "  ✓ Daemon running, $BEAD_COUNT beads visible"
 echo ""
 echo "Next steps on the VPS:"

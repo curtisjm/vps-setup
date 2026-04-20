@@ -11,12 +11,14 @@
 #   2. Installs Node.js via nvm (lets you switch versions easily)
 #   3. Installs Python 3 + pip + venv + pipx
 #   4. Installs uv (fast Python package/project manager, useful for modern tools)
-#   5. Installs Go (required to build gt/bd — Gas Town core binaries)
+#   5. Installs Go (used for Go-based dev work; gt/bd themselves come from brew below)
 #   6. Installs useful CLI tools (tmux, ripgrep, fzf, jq, mosh, restic, etc.)
 #   7. Installs Docker (optional — needed if you want to containerize agents)
 #   8. Installs GitHub CLI (for easier GitHub operations)
-#   9. Installs Claude Code CLI
-#  10. Installs gt (Gas Town) and bd (Beads) from source via `go install`
+#   9. Installs Claude Code CLI + OpenAI Codex CLI via npm
+#  10. Installs Linuxbrew and uses it to install gt (Gas Town), bd (Beads),
+#      and gc (Gas City) — matching Curtis's laptop setup (upstream releases,
+#      not fork HEAD). Daily updates: `brew upgrade`.
 #
 # USAGE:
 #   Run as your normal user (NOT root). You'll be prompted for sudo.
@@ -223,8 +225,10 @@ fi
 # ----------------------------------------------------------------------------
 # Step 5b: Install Go toolchain
 # ----------------------------------------------------------------------------
-# Gas Town's gt, bd (Beads), and wl (Wasteland) are all Go binaries. We install
-# them later with `go install`, which requires a Go toolchain on PATH.
+# Go is kept around for Go-based dev work (building gastown/beads from source
+# when you're working on a PR, running `go test` in the rig checkouts, etc.).
+# The daily-driver gt/bd/gc binaries come from Linuxbrew further down — this
+# Go install is NOT the install source for them.
 #
 # Why NOT apt: Ubuntu 22.04 ships Go 1.18; gastown requires 1.24+. Even 24.04
 # may lag behind. We install the official tarball to /usr/local/go, which is
@@ -399,43 +403,82 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# Step 8b: Install Gas Town core binaries (gt + bd)
+# Step 8b: Install Linuxbrew (for gt / bd / gc)
 # ----------------------------------------------------------------------------
-# gt = orchestrator, bd = issue tracker (Beads). Both are Go binaries installed
-# from GitHub. We install them globally (well, per-user into ~/go/bin) so they
-# work from anywhere, not just inside a gastown clone.
+# Curtis runs gt (gastown), bd (beads), and gc (gascity) on the laptop via
+# Homebrew (`/opt/homebrew/bin/gt|bd|gc`). To keep the VPS parallel, we install
+# Linuxbrew here and use it for the same three tools. Benefits:
+#   - `brew upgrade` updates all three with one command. No pulling source,
+#     no `make install`, no version drift between laptop and VPS.
+#   - Matches the installation Curtis's CLAUDE.md / workflow assumes.
+#   - Upstream publishes signed release binaries through goreleaser; brew
+#     pulls those rather than building locally.
 #
-# Why `go install` and not a binary release?
-#   - Upstream gastown/beads don't publish binary releases on every commit.
-#   - `go install @latest` pulls the tagged release, builds reproducibly against
-#     your local Go toolchain, and lands the binary in ~/go/bin.
-#   - The migration script (06-migrate-gastown.sh) can override these with
-#     `make install` from your tracked ~/gt checkout if you want the exact
-#     commit your laptop is on — use that if you're on a fork or carry branch.
+# The ~/gt/gastown/mayor/rig and ~/gt/gascity/mayor/rig checkouts (cloned by
+# 06-migrate-gastown.sh) are for DEV work on those projects — not the install
+# source for the binary. Don't `make install` them and overwrite the brew
+# binary unless you specifically want to run your fork's build.
 #
-# Wasteland (wl) is intentionally skipped here — it's optional for basic Gas
-# Town operation, and you may want to install it from a specific fork. Install
-# manually later if you use federation:
-#     go install github.com/julianknutsen/wasteland/cmd/wl@latest
+# Linuxbrew lives at /home/linuxbrew/.linuxbrew. The installer creates a
+# 'linuxbrew' user and group if they don't exist, and requires sudo to write
+# into /home/linuxbrew. Shell init (brew shellenv) is wired into ~/.bashrc
+# in Step 9 below so future shells pick it up.
 
-log "Installing Gas Town binaries (gt, bd)..."
+log "Installing Linuxbrew..."
+BREW_PREFIX="/home/linuxbrew/.linuxbrew"
+BREW_BIN="$BREW_PREFIX/bin/brew"
 
-# Ensure ~/go/bin exists; go install puts binaries there.
-mkdir -p "$HOME/go/bin"
-
-if command -v gt &> /dev/null; then
-    warn "gt already installed ($(gt version 2>/dev/null | head -1)), skipping"
+if [[ -x "$BREW_BIN" ]]; then
+    warn "Linuxbrew already installed at $BREW_PREFIX, skipping"
 else
-    go install github.com/steveyegge/gastown/cmd/gt@latest
+    # Homebrew's installer prompts by default; NONINTERACTIVE=1 skips the
+    # "press enter to continue" prompt, which would hang a script run.
+    # CI=1 is a further non-interactive hint it honors.
+    NONINTERACTIVE=1 CI=1 /bin/bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    ok "Linuxbrew installed at $BREW_PREFIX"
+fi
+
+# Source brew into the current shell so the next step can use it.
+# shellenv exports PATH, HOMEBREW_PREFIX, HOMEBREW_CELLAR, MANPATH, INFOPATH.
+eval "$("$BREW_BIN" shellenv)"
+
+# ----------------------------------------------------------------------------
+# Step 8c: Install gt (gastown), bd (beads), gc (gascity) via brew
+# ----------------------------------------------------------------------------
+# Three separate calls rather than one `brew install gastown beads ...` so
+# the "already installed, skipping" warning is per-tool and doesn't mask a
+# partial failure.
+
+log "Installing Gas Town binaries via brew (gt, bd, gc)..."
+
+# gastown (gt) — homebrew-core
+if command -v gt &> /dev/null && [[ "$(command -v gt)" == "$BREW_PREFIX"* ]]; then
+    warn "gt already installed from brew ($(gt version 2>/dev/null | head -1)), skipping"
+else
+    brew install gastown
     ok "gt installed: $(gt version 2>/dev/null | head -1 || echo 'unknown')"
 fi
 
-if command -v bd &> /dev/null; then
-    warn "bd already installed ($(bd version 2>/dev/null | head -1)), skipping"
+# beads (bd) — homebrew-core, works on Linux
+if command -v bd &> /dev/null && [[ "$(command -v bd)" == "$BREW_PREFIX"* ]]; then
+    warn "bd already installed from brew ($(bd version 2>/dev/null | head -1)), skipping"
 else
-    go install github.com/steveyegge/beads/cmd/bd@latest
+    brew install beads
     ok "bd installed: $(bd version 2>/dev/null | head -1 || echo 'unknown')"
 fi
+
+# gascity (gc) — third-party tap gastownhall/gascity
+if command -v gc &> /dev/null && [[ "$(command -v gc)" == "$BREW_PREFIX"* ]]; then
+    warn "gc already installed from brew ($(gc version 2>/dev/null | head -1)), skipping"
+else
+    brew install gastownhall/gascity/gascity
+    ok "gc installed: $(gc version 2>/dev/null | head -1 || echo 'unknown')"
+fi
+
+# Wasteland (wl) is intentionally not installed here — it's optional for
+# basic Gas Town operation, and the upstream fork/install path varies. If
+# you use federation, install it separately.
 
 # ----------------------------------------------------------------------------
 # Step 9: Shell quality-of-life improvements
@@ -468,10 +511,19 @@ esac
 # uv installs to ~/.cargo/bin or ~/.local/bin depending on version
 [[ -d "$HOME/.cargo/bin" ]] && export PATH="$HOME/.cargo/bin:$PATH"
 
-# Go toolchain + go-installed binaries (gt, bd, wl) live here.
+# Go toolchain + any locally-built Go binaries (for dev work on gastown/beads
+# from source). The daily-driver gt/bd/gc come from Linuxbrew; these paths are
+# for when you're building from ~/gt/gastown/mayor/rig/ etc.
 # Keep these LAST in the PATH prefixes so apt-installed tools win ties.
 [[ -d "/usr/local/go/bin" ]] && export PATH="$PATH:/usr/local/go/bin"
 [[ -d "$HOME/go/bin" ]] && export PATH="$PATH:$HOME/go/bin"
+
+# Linuxbrew — source of gt (gastown), bd (beads), gc (gascity). Put this
+# AFTER the go-bin lines so brew binaries take precedence over any stray
+# go-install artifacts in ~/go/bin. Update these tools with `brew upgrade`.
+if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
 
 # direnv hook — loads/unloads .envrc files when you cd into a directory.
 # Used by Gas Town rigs that need GT_DOLT_HOST or per-rig tokens.
@@ -572,10 +624,11 @@ echo "  ✓ Python 3 + pip + pipx + uv"
 echo "  ✓ Go $GO_VERSION"
 echo "  ✓ GitHub CLI (gh)"
 echo "  ✓ Docker (you were added to docker group — re-login to use without sudo)"
-echo "  ✓ Claude Code CLI"
-echo "  ✓ OpenAI Codex CLI"
+echo "  ✓ Claude Code CLI (via npm; update: npm install -g @anthropic-ai/claude-code@latest)"
+echo "  ✓ OpenAI Codex CLI (via npm; update: npm install -g @openai/codex@latest)"
 echo "  ✓ Atuin (Ctrl-R for fuzzy shell history)"
-echo "  ✓ Gas Town: gt + bd (via go install)"
+echo "  ✓ Linuxbrew at /home/linuxbrew/.linuxbrew"
+echo "  ✓ Gas Town: gt + bd + gc (via brew; update: brew upgrade)"
 echo "  ✓ Shell aliases and tmux config"
 echo ""
 echo "IMPORTANT: Run 'source ~/.bashrc' or log out and back in to pick up"
@@ -588,4 +641,10 @@ echo "  3. Run 'claude' to authenticate Claude Code"
 echo "  4. Run 'codex login' to authenticate OpenAI Codex"
 echo "  5. Run 'gh auth login' to authenticate GitHub CLI"
 echo "  6. (Optional) 'atuin register' to sync history across machines"
+echo ""
+echo "Keeping things up to date:"
+echo "  brew upgrade                                  # gt, bd, gc, and any other brew tools"
+echo "  npm install -g @anthropic-ai/claude-code@latest  # Claude Code"
+echo "  npm install -g @openai/codex@latest           # Codex"
+echo "  sudo apt-get update && sudo apt-get upgrade   # system packages (also runs unattended)"
 echo ""
